@@ -1,16 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
-	//	"log"
+	"log"
 	"net/http"
 	"strings"
 	//"encoding/base64"
 	"bytes"
+	"runtime"
+	"time"
 	"unicode"
 
 	_ "github.com/lib/pq"
@@ -20,9 +23,9 @@ var DB *sql.DB
 
 var Queries = map[string]string{
 	"arp":          `SELECT * FROM "domain.arp"`,
-	"arp-standard": `select * from "domain.arp" as domain_arp join standard on standard.id=domain_arp.device_id`,
+	"arp-standard": `select * FROM "domain.arp" as domain_arp join standard on standard.id=domain_arp.device_id`,
 	"packages":     `SELECT * FROM "domain.packages"`,
-	"list":         `SELECT able_name FROM information_schema.tables WHERE table_schema='public'`,
+	"list":         `SELECT table_name FROM information_schema.tables WHERE table_schema='public'`,
 	"columns":      `SELECT column_name, data_type FROM information_schema.columns`,
 	"link-tips": `WITH main_table_columns AS (
                         SELECT column_name, data_type
@@ -160,6 +163,60 @@ func streamJSON(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData)
 	// End the JSON array
 	w.Write([]byte("]"))
 }
+func streamJSON_MEM(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
+	cols, err := rows.Columns()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	// Begin the JSON array
+	bw := bufio.NewWriter(w)
+	bw.Write([]byte("["))
+
+	values := make([]interface{}, len(cols))
+	valuePtrs := make([]interface{}, len(cols))
+	entry := make(map[string]interface{}, len(cols))
+
+	isFirst := true
+	for rows.Next() {
+		for i := 0; i < len(cols); i++ {
+			valuePtrs[i] = &values[i]
+		}
+
+		rows.Scan(valuePtrs...)
+
+		for i, colName := range cols {
+			var v interface{} = values[i]
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+			entry[colName] = v
+		}
+
+		if isFirst {
+			isFirst = false
+		} else {
+			bw.Write([]byte(","))
+		}
+
+		if err := json.NewEncoder(bw).Encode(entry); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	bw.Write([]byte("]"))
+	bw.Flush()
+}
 
 func streamCSV(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
 	w.Header().Set("Content-Type", "text/csv")
@@ -205,6 +262,123 @@ func streamCSV(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) 
 			http.Error(w, "Failed to write data row: "+err.Error(), 500)
 			return
 		}
+	}
+}
+func streamCSV2(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=data.csv")
+
+	const bufferSize = 2 * 1024 * 1024 // 2MB
+	bw := bufio.NewWriterSize(w, bufferSize)
+	writer := csv.NewWriter(bw)
+	defer writer.Flush()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		http.Error(w, "Failed to get columns: "+err.Error(), 500)
+		return
+	}
+
+	if err := writer.Write(cols); err != nil {
+		http.Error(w, "Failed to write header row: "+err.Error(), 500)
+		return
+	}
+
+	columnValues := make([]interface{}, len(cols))
+	columnPointers := make([]interface{}, len(cols))
+	for rows.Next() {
+		for i := range columnValues {
+			columnPointers[i] = &columnValues[i]
+		}
+
+		if err := rows.Scan(columnPointers...); err != nil {
+			http.Error(w, "Failed to scan row: "+err.Error(), 500)
+			return
+		}
+
+		row := make([]string, len(cols))
+		for i, col := range columnValues {
+			switch value := col.(type) {
+			case []byte:
+				row[i] = string(value) // Convert []byte to string
+			default:
+				row[i] = fmt.Sprintf("%v", col)
+			}
+		}
+
+		if err := writer.Write(row); err != nil {
+			http.Error(w, "Failed to write data row: "+err.Error(), 500)
+			return
+		}
+	}
+
+	if err = bw.Flush(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+}
+func streamCSV3(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=data.csv")
+
+	const bufferSize = 2 * 1024 * 1024 // 2MB
+	bw := bufio.NewWriterSize(w, bufferSize)
+	writer := csv.NewWriter(bw)
+	defer writer.Flush()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		http.Error(w, "Failed to get columns: "+err.Error(), 500)
+		return
+	}
+
+	if err := writer.Write(cols); err != nil {
+		http.Error(w, "Failed to write header row: "+err.Error(), 500)
+		return
+	}
+
+	columnValues := make([]interface{}, len(cols))
+	columnPointers := make([]interface{}, len(cols))
+	row := make([]string, len(cols))
+	for i := range columnValues {
+		columnPointers[i] = &columnValues[i]
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(columnPointers...); err != nil {
+			http.Error(w, "Failed to scan row: "+err.Error(), 500)
+			return
+		}
+
+		for i, col := range columnValues {
+			switch value := col.(type) {
+			case nil:
+				row[i] = "<nil>"
+			case []byte:
+				row[i] = string(value)
+			case string:
+				if strings.HasPrefix(value, "{") && strings.HasSuffix(value, "}") {
+					// Remove curly braces and replace comma with ';'
+					// or another character of choice for arrays
+					row[i] = strings.Trim(value, "{}")
+					row[i] = strings.Replace(row[i], ",", ";", -1)
+				} else {
+					row[i] = value
+				}
+			default:
+				row[i] = fmt.Sprintf("%v", col)
+			}
+		}
+
+		if err := writer.Write(row); err != nil {
+			http.Error(w, "Failed to write data row: "+err.Error(), 500)
+			return
+		}
+	}
+
+	if err = bw.Flush(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
 	}
 }
 
@@ -259,13 +433,52 @@ func streamJSONGrouped(w http.ResponseWriter, rows *sql.Rows, requestData *Reque
 	}
 }
 
+func streamJSONWithPQ(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
+	defer rows.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	// Begin the JSON array
+	w.Write([]byte("["))
+
+	isFirst := true
+	for rows.Next() {
+		var rowData string
+		if err := rows.Scan(&rowData); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		// If it's not the first row, write a comma separator
+		if isFirst {
+			isFirst = false
+		} else {
+			w.Write([]byte(","))
+		}
+
+		w.Write([]byte(rowData))
+	}
+
+	// End the JSON array
+	w.Write([]byte("]"))
+}
+
 func encodeResponse(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
 
 	switch requestData.Format {
 	case "json":
 		streamJSON(w, rows, requestData)
+	case "jsonmem2":
+		streamJSON_MEM2(w, rows, requestData)
+	case "jsonpq":
+		streamJSONWithPQ(w, rows, requestData)
 	case "csv":
 		streamCSV(w, rows, requestData)
+	case "csv2":
+		streamCSV2(w, rows, requestData)
+	case "csv3":
+		streamCSV3(w, rows, requestData)
 	case "jsonGrouped":
 		if requestData.GroupByKey2 != "" {
 			streamJSONGroupedDeep(w, rows, requestData)
@@ -440,6 +653,191 @@ func QueriesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(queryInfoList)
 }
+func streamJSON_MEM2(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
+	cols, err := rows.Columns()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	const bufferSize = 2 * 1024 * 1024 // 2MB
+
+	bw := bufio.NewWriterSize(w, bufferSize)
+	//bw := bufio.NewWriter(w)
+
+	if _, err = bw.Write([]byte("[")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	values := make([]interface{}, len(cols))
+	valuePtrs := make([]interface{}, len(cols))
+	entry := make(map[string]interface{}, len(cols))
+	colNamesInJSON := precomputeJSONColNames(cols)
+
+	isFirst := true
+	for rows.Next() {
+		for i := 0; i < len(cols); i++ {
+			valuePtrs[i] = &values[i]
+		}
+
+		rows.Scan(valuePtrs...)
+
+		for i, jsonColName := range colNamesInJSON {
+			var v interface{} = values[i]
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+			entry[jsonColName] = v
+		}
+
+		if isFirst {
+			isFirst = false
+		} else {
+			if _, err = bw.Write([]byte(",")); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
+
+		if err := json.NewEncoder(bw).Encode(entry); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	if _, err = bw.Write([]byte("]")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	if err = bw.Flush(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+}
+
+// precomputeJSONColNames computes the JSON column names in advance to avoid overhead during row processing
+func precomputeJSONColNames(cols []string) []string {
+	names := make([]string, len(cols))
+	for i, col := range cols {
+		// Convert col into its JSON representation (e.g., handle camelCasing or other transformations)
+		// Here, it's a placeholder and assumes the column name does not change.
+		names[i] = col
+	}
+	return names
+}
+func streamJSON3(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
+	cols, err := rows.Columns()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	const bufferSize = 2 * 1024 * 1024 // 2MB
+	bw := bufio.NewWriterSize(w, bufferSize)
+	encoder := json.NewEncoder(bw) // Initialize the encoder here
+
+	if _, err = bw.Write([]byte("[")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	values := make([]interface{}, len(cols))
+	valuePtrs := make([]interface{}, len(cols))
+	entry := make(map[string]interface{}, len(cols))
+	colNamesInJSON := precomputeJSONColNames(cols)
+
+	if rows.Next() {
+		for i := 0; i < len(cols); i++ {
+			valuePtrs[i] = &values[i]
+		}
+		rows.Scan(valuePtrs...)
+
+		for i, jsonColName := range colNamesInJSON {
+			var v interface{} = values[i]
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+			entry[jsonColName] = v
+		}
+		if err := encoder.Encode(entry); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+
+	for rows.Next() {
+		if _, err = bw.Write([]byte(",")); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		for i := 0; i < len(cols); i++ {
+			valuePtrs[i] = &values[i]
+		}
+		rows.Scan(valuePtrs...)
+
+		for i, jsonColName := range colNamesInJSON {
+			var v interface{} = values[i]
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+			entry[jsonColName] = v
+		}
+		if err := encoder.Encode(entry); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	if _, err = bw.Write([]byte("]")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	if err = bw.Flush(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+}
+
+func LoggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		startTime := time.Now()
+
+		// Continue processing the request
+		next(w, r)
+
+		endTime := time.Now()
+		requestDuration := endTime.Sub(startTime)
+
+		// Log the request details
+		clientIP := r.RemoteAddr
+		userAgent := r.UserAgent()
+		requestURI := r.RequestURI
+		requestMethod := r.Method
+
+		log.Printf("Duration: %v, IP: %s, User-Agent: %s, Method: %s, URI: %s",
+			requestDuration, clientIP, userAgent, requestMethod, requestURI)
+	}
+}
 
 const SERVER_HOST = ":8080"
 
@@ -452,9 +850,27 @@ func main() {
 		panic(err)
 	}
 
-	http.HandleFunc("/api/help/", QueriesHandler)
-	http.HandleFunc("/api/", QueryHandler)
+	http.HandleFunc("/api/help/", LoggingMiddleware(QueriesHandler))
+	http.HandleFunc("/api/", LoggingMiddleware(QueryHandler))
+
+	go logMemoryUsagePeriodically()
 
 	fmt.Println("Server started on :8080")
 	http.ListenAndServe(SERVER_HOST, nil)
+}
+func logMemoryUsagePeriodically() {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		log.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+		log.Printf("TotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+		log.Printf("Sys = %v MiB", bToMb(m.Sys))
+		log.Printf("NumGC = %v\n", m.NumGC)
+	}
+}
+
+func bToMb(b uint64) uint64 {
+	return b / 1024 / 1024
 }

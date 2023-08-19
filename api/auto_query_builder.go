@@ -6,70 +6,68 @@ import (
 	"strings"
 )
 
-type OperatorMapping struct {
-	QueryParam  string
-	SQLOperator string
+// 1. Operator Map
+var SQLOperators = map[string]string{
+	"MATCH":              "= %s",
+	"NOTMATCH":           "!= %s",
+	"IMATCH":             "ILIKE %s",
+	"STARTSWITH":         "LIKE %s || '%%'",
+	"ISTARTSWITH":        "ILIKE %s || '%%'",
+	"ENDSWITH":           "LIKE '%%' || %s",
+	"IENDSWITH":          "ILIKE '%%' || %s",
+	"TEXT_CONTAINS":      "LIKE '%%' || %s || '%%'",
+	"ITEXT_CONTAINS":     "ILIKE '%%' || %s || '%%'",
+	"GT":                 "> %s",
+	"LT":                 "< %s",
+	"LTE":                "<= %s",
+	"GTE":                ">= %s",
+	"IN":                 "IN (%s)",
+	"NOTIN":              "NOT IN (%s)",
+	"NEQ":                "<> %s",
+	"CONTAINED_BY_OR_EQ": ">>= %s",
+	"CONTAINS_OR_EQ":     "<<= %s",
+	"CONTAINED_BY":       ">> %s",
+	"CONTAINS":           "<< %s",
+	"IS_SUPERNET_OR_EQ":  "~>= %s",
+	"IS_SUBNET_OR_EQ":    "~<= %s",
+	"IS_SUPERNET":        "~> %s",
+	"IS_SUBNET":          "~< %s",
+	"BEFORE":             "< %s",
+	"AFTER":              "> %s",
+	"ON_OR_BEFORE":       "<= %s",
+	"ON_OR_AFTER":        ">= %s",
+	"BETWEEN":            "BETWEEN %s AND %s",
+	"NOT_BETWEEN":        "NOT BETWEEN %s AND %s",
+	// ... add others as needed
 }
 
-var typeOperatorsMap = map[string][]OperatorMapping{
-	"text": {
-		{QueryParam: "match", SQLOperator: "%s = $%s"},                         // Equals
-		{QueryParam: "not_match", SQLOperator: "%s != $%s"},                    // Not Equals
-		{QueryParam: "imatch", SQLOperator: "%s ILIKE $%s"},                    // Case-Insensitive Equals
-		{QueryParam: "startswith", SQLOperator: "%s LIKE $%s || '%%'"},         // Starts With
-		{QueryParam: "istartswith", SQLOperator: "%s ILIKE $%s || '%%'"},       // Case-Insensitive Starts With
-		{QueryParam: "endswith", SQLOperator: "%s LIKE '%%' || $%s"},           // Ends With
-		{QueryParam: "iendswith", SQLOperator: "%s ILIKE '%%' || $%s"},         // Case-Insensitive Ends With
-		{QueryParam: "contains", SQLOperator: "%s LIKE '%%' || $%s || '%%'"},   // Contains
-		{QueryParam: "icontains", SQLOperator: "%s ILIKE '%%' || $%s || '%%'"}, // Case-Insensitive Contains
-	},
-	"cidr": {
-		{QueryParam: "match", SQLOperator: "%s = $%s"},
-		{QueryParam: "neq", SQLOperator: "%s <> $%s"},
-		{QueryParam: "contained_by_or_eq", SQLOperator: "%s >>= $%s"},
-		{QueryParam: "contains_or_eq", SQLOperator: "%s <<= $%s"},
-		{QueryParam: "contained_by", SQLOperator: "%s >> $%s"},
-		{QueryParam: "contains", SQLOperator: "%s << $%s"},
-		{QueryParam: "is_supernet_or_eq", SQLOperator: "%s ~>= $%s"},
-		{QueryParam: "is_subnet_or_eq", SQLOperator: "%s ~<= $%s"},
-		{QueryParam: "is_supernet", SQLOperator: "%s ~> $%s"},
-		{QueryParam: "is_subnet", SQLOperator: "%s ~< $%s"},
-	},
-	"int": {
-		{QueryParam: "match", SQLOperator: "%s = $%s"},
-		{QueryParam: "eq", SQLOperator: "%s = $%s"},
-		{QueryParam: "ne", SQLOperator: "%s != $%s"},
-		{QueryParam: "gt", SQLOperator: "%s > $%s"},
-		{QueryParam: "lt", SQLOperator: "%s < $%s"},
-		{QueryParam: "gte", SQLOperator: "%s >= $%s"},
-		{QueryParam: "lte", SQLOperator: "%s <= $%s"},
-		{QueryParam: "in", SQLOperator: "%s IN ($%s)"},
-		{QueryParam: "nin", SQLOperator: "%s NOT IN ($%s)"},
-	},
-	"uuid": {
-		{QueryParam: "eq", SQLOperator: "%s = $%s"},   // Equals
-		{QueryParam: "neq", SQLOperator: "%s != $%s"}, // Not Equals
-	},
-	"timezone": {
-		{QueryParam: "eq", SQLOperator: "%s = $%s"},                            // Equals
-		{QueryParam: "neq", SQLOperator: "%s != $%s"},                          // Not Equals
-		{QueryParam: "before", SQLOperator: "%s < $%s"},                        // Before
-		{QueryParam: "after", SQLOperator: "%s > $%s"},                         // After
-		{QueryParam: "on_or_before", SQLOperator: "%s <= $%s"},                 // On or Before
-		{QueryParam: "on_or_after", SQLOperator: "%s >= $%s"},                  // On or After
-		{QueryParam: "between", SQLOperator: "%s BETWEEN $%s AND $%s"},         // Between
-		{QueryParam: "not_between", SQLOperator: "%s NOT BETWEEN $%s AND $%s"}, // Not Between
-		{QueryParam: "in", SQLOperator: "%s IN ($%s)"},                         // In
-		{QueryParam: "nin", SQLOperator: "%s NOT IN ($%s)"},                    // Not In
-	},
+// 2. Allowed Operator Map
+var AllowedOperators = map[string][]string{
+	"text":     {"MATCH", "NOTMATCH", "IMATCH", "STARTSWITH", "ISTARTSWITH", "ENDSWITH", "IENDSWITH", "CONTAINS", "ICONTAINS"},
+	"cidr":     {"MATCH", "NEQ", "CONTAINED_BY_OR_EQ", "CONTAINS_OR_EQ", "CONTAINED_BY", "CONTAINS", "IS_SUPERNET_OR_EQ", "IS_SUBNET_OR_EQ", "IS_SUPERNET", "IS_SUBNET"},
+	"int":      {"MATCH", "GT", "LT", "LTE", "GTE", "IN", "NOTIN", "NEQ"},
+	"uuid":     {"MATCH", "NOTMATCH"},
+	"timezone": {"MATCH", "NOTMATCH", "BEFORE", "AFTER", "ON_OR_BEFORE", "ON_OR_AFTER", "BETWEEN", "NOT_BETWEEN", "IN", "NOTIN"},
+	// ... add others as needed
+}
+
+func isValidOperatorForType(dataType, operatorKey string) bool {
+	for _, validOp := range AllowedOperators[dataType] {
+		if validOp == operatorKey {
+			return true
+		}
+	}
+	return false
+}
+
+func transOperator(operator string) string {
+	return SQLOperators[strings.ToUpper(operator)]
 }
 
 func ParseQueryParams(params url.Values) (*QueryParams, error) {
 	qp := &QueryParams{}
-
 	// Parse main table (dn)
 	qp.MainTable = TableNameToSQL(params.Get("dn"))
-
 	// Parse select fields
 	qp.Selects = params["select"]
 
@@ -104,39 +102,22 @@ func ParseQueryParams(params url.Values) (*QueryParams, error) {
 		qp.Joins = append(qp.Joins, join)
 	}
 	// Parse Filters
-	for _, filter := range params["filter"] {
-		parts := strings.SplitN(filter, ":", 4)
-		fmt.Println(parts)
-		if len(parts) < 4 {
-			return nil, fmt.Errorf("malformed filter parameter: %s", filter)
-		}
-
-		fp := FilterPart{
-			Operator: parts[0],
-			DNPath:   parts[1] + "." + parts[2], // This was previously parts[1]
-			Value:    parts[3],                  // This was previously parts[2]
-		}
-
-		qp.Filters = append(qp.Filters, fp)
-	}
-
-	/* Parse filters
-	for _, filter := range params["filter"] {
+	for counter, filter := range params["filter"] {
 		parts := strings.SplitN(filter, ":", 3)
+		fmt.Println(parts)
 		if len(parts) < 3 {
 			return nil, fmt.Errorf("malformed filter parameter: %s", filter)
 		}
 
 		fp := FilterPart{
-			Operator: parts[0],
-			DNPath:   parts[1],
-			Value:    parts[2],
+			Operator:    transOperator(parts[0]),
+			DNPath:      parts[1],
+			Value:       parts[2],
+			Placeholder: fmt.Sprintf("$%d", counter+1),
 		}
 
 		qp.Filters = append(qp.Filters, fp)
 	}
-	*/
-
 	return qp, nil
 }
 
@@ -147,9 +128,10 @@ type JoinPart struct {
 }
 
 type FilterPart struct {
-	Operator string
-	DNPath   string
-	Value    string
+	Operator    string
+	DNPath      string
+	Value       string
+	Placeholder string
 }
 
 type QueryParams struct {
@@ -159,13 +141,23 @@ type QueryParams struct {
 	Filters   []FilterPart
 }
 
-func TableNameToSQL(tableName string) string {
+func TableNameToSQL1(tableName string) string {
 	parts := strings.Split(tableName, ".")
 	if len(parts) == 1 {
 		return parts[0]
 	}
 	return strings.Join(parts[:len(parts)-1], "_") + "_" + parts[len(parts)-1]
 }
+
+func TableNameToSQL(tableName string) string {
+	parts := strings.Split(tableName, ".")
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	alias := strings.Join(parts, "_")
+	return fmt.Sprintf("\"%s\" AS %s", tableName, alias)
+}
+
 func ColumnNameToSQL(columnName string) string {
 	parts := strings.Split(columnName, ".")
 	if len(parts) < 2 {
@@ -175,10 +167,10 @@ func ColumnNameToSQL(columnName string) string {
 	return tableName + "." + parts[len(parts)-1]
 }
 
-func ConstructQuery(params url.Values) (string, error) {
+func ConstructQuery(params url.Values) (string, map[string]string, error) {
 	qp, err := ParseQueryParams(params)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	// Building SELECT clause
@@ -194,7 +186,7 @@ func ConstructQuery(params url.Values) (string, error) {
 	}
 
 	// Building FROM clause
-	fromClause := fmt.Sprintf("FROM %s", TableNameToSQL(qp.MainTable))
+	fromClause := fmt.Sprintf("FROM %s", qp.MainTable)
 
 	// Building JOIN clause
 	joinClauses := []string{}
@@ -204,10 +196,14 @@ func ConstructQuery(params url.Values) (string, error) {
 	}
 
 	// Building WHERE clause
+	valuesMap := make(map[string]string)
 	whereClauses := []string{}
 	for _, filter := range qp.Filters {
-		filterSQL := fmt.Sprintf("%s %s '%s'", ColumnNameToSQL(filter.DNPath), filter.Operator, filter.Value)
+		operator := fmt.Sprintf(filter.Operator, filter.Placeholder) // format the operator string here
+		filterSQL := fmt.Sprintf("%s %s", ColumnNameToSQL(filter.DNPath), operator)
 		whereClauses = append(whereClauses, filterSQL)
+
+		valuesMap[filter.Placeholder] = filter.Value
 	}
 	whereClause := ""
 	if len(whereClauses) > 0 {
@@ -216,8 +212,7 @@ func ConstructQuery(params url.Values) (string, error) {
 
 	// Assembling the final SQL query
 	query := fmt.Sprintf("%s %s %s %s", selectClause, fromClause, strings.Join(joinClauses, " "), whereClause)
-
-	return query, nil
+	return query, valuesMap, nil
 }
 
 func main() {
@@ -229,18 +224,20 @@ func main() {
 	queries := []string{
 		rawQuery,
 		simple,
-		"dn=domain.arp&link=domain.arp.device_id:standard.id",
-		"dn=domain.arp&link=domain.arp.device_id:standard.id&filter=match:domain.arp:ipddress:172.23.49.175/32",
+		"dn=domain.arp&link=domain.arp.standard_id:standard.id",
+		"dn=domain.arp&link=domain.arp.standard_id:standard.id&filter=match:domain.arp.ip_address:172.23.49.175",
+		"dn=domain.arp&link=domain.arp.standard_id:standard.id&filter=match:domain.arp.ip_address:172.23.49.175&filter=match:domain.arp.device:eth1",
 	}
 	expected := []string{
 		`SELECT foo_bar.id, foo_bar.name FROM foo_bar INNER JOIN baz ON foo_bar.id = baz.qux LEFT JOIN baz ON foo_bar.id = baz_qux.id WHERE foo_bar.name match 'John:Wick'`,
-		`SELECT * FROM domain_arp`,
-		`SELECT * FROM domain_arp INNER JOIN standard ON domain_arp.device_id = standard.id`,
-		`SELECT * FROM domain_arp INNER JOIN standard ON domain_arp.device_id = standard.id WHERE domain.arp.ipddress match '172.23.49.175/32'`,
+		`SELECT * FROM domain.arp`,
+		`SELECT * FROM domain.arp INNER JOIN standard ON domain_arp.standard_id = standard.id`,
+		`SELECT * FROM domain.arp INNER JOIN standard ON domain_arp.standard_id = standard.id WHERE domain.arp.ip_address = '172.23.49.175'`,
+		`SELECT * FROM "domain.arp" AS domain_arp INNER JOIN standard ON domain_arp.standard_id = standard.id WHERE domain_arp.ip_address = $1 AND domain_arp.device = $2`,
 	}
 	for i, urlQuery := range queries {
 		params, _ := url.ParseQuery(urlQuery)
-		query, err := ConstructQuery(params)
+		query, valuesMap, err := ConstructQuery(params)
 		if err != nil {
 			fmt.Println("Error:", err)
 			return
@@ -249,6 +246,7 @@ func main() {
 		fmt.Println(params)
 		fmt.Println(urlQuery)
 		fmt.Println(query)
+		fmt.Println(valuesMap)
 		if query != expected[i] {
 			fmt.Println(expected[i])
 
