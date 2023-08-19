@@ -1,0 +1,79 @@
+mport (
+    "fmt"
+    "net/url"
+    "strings"
+)
+
+type OperatorMapping struct {
+    QueryParam  string
+    SQLOperator string
+}
+
+var typeOperatorsMap = map[string][]OperatorMapping{
+    "text": {
+        {QueryParam: "eq", SQLOperator: "%s = $%s"},
+        {QueryParam: "startswith", SQLOperator: "%s LIKE $%s"},
+        {QueryParam: "endswith", SQLOperator: "%s LIKE $%s"},
+        {QueryParam: "contains", SQLOperator: "%s LIKE $%s"},
+    },
+    "cidr": {
+        {QueryParam: "eq", SQLOperator: "%s = $%s"},
+        {QueryParam: "neq", SQLOperator: "%s <> $%s"},
+        {QueryParam: "contained_by_or_eq", SQLOperator: "%s >>= $%s"},
+        {QueryParam: "contains_or_eq", SQLOperator: "%s <<= $%s"},
+        {QueryParam: "contained_by", SQLOperator: "%s >> $%s"},
+        {QueryParam: "contains", SQLOperator: "%s << $%s"},
+        {QueryParam: "is_supernet_or_eq", SQLOperator: "%s ~>= $%s"},
+        {QueryParam: "is_subnet_or_eq", SQLOperator: "%s ~<= $%s"},
+        {QueryParam: "is_supernet", SQLOperator: "%s ~> $%s"},
+        {QueryParam: "is_subnet", SQLOperator: "%s ~< $%s"},
+    },
+    // ... Add more data t  /es and their operators as needed
+}
+
+func ConstructWhereClause(mainTable string, params url.Values) (string, []interface{}, error) {
+    whereClauses := []string{}
+    values := []interface{}{}
+    paramCount := 1
+
+    for key, valList := range params {
+        parts := strings.SplitN(key, "-", 2)
+        if len(parts) != 2 {
+            return "", nil, fmt.Errorf("malformed query parameter key: %s", key)
+        }
+
+        operator, columnAndTable := parts[0], parts[1]
+        tableParts := strings.SplitN(columnAndTable, ".", 2)
+
+        var column, table string
+        if len(tableParts) == 2 {
+            table, column = tableParts[0], tableParts[1]
+        } else {
+            column = tableParts[0]
+            table = mainTable
+        }
+
+        if ops, ok := typeOperatorsMap[column]; ok {
+            var sqlOperator string
+            for _, op := range ops {
+                if op.QueryParam == operator {
+                    sqlOperator = op.SQLOperator
+                    break
+                }
+            }
+            if sqlOperator == "" {
+                return "", nil, fmt.Errorf("invalid operator %s for column %s", operator, column)
+            }
+
+            whereClause := fmt.Sprintf(sqlOperator, table+"."+column, fmt.Sprintf("$%d", paramCount))
+            whereClauses = append(whereClauses, whereClause)
+            values = append(values, valList[0])
+            paramCount++
+        } else {
+            return "", nil, fmt.Errorf("invalid column name: %s", column)
+        }
+    }
+
+    return "WHERE " + strings.Join(whereClauses, " AND "), values, nil
+}
+
