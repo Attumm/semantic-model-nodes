@@ -25,7 +25,7 @@ var Queries = map[string]string{
 	"arp":          `SELECT * FROM "domain.arp"`,
 	"arp-standard": `select * FROM "domain.arp" as domain_arp join standard on standard.id=domain_arp.device_id`,
 	"packages":     `SELECT * FROM "domain.packages"`,
-	"list":         `SELECT table_name FROM information_schema.tables WHERE table_schema='public'`,
+	"list":         `SELECT table_name as nodes FROM information_schema.tables WHERE table_schema='public'`,
 	"columns":      `SELECT column_name, data_type FROM information_schema.columns`,
 	"link-tips": `WITH main_table_columns AS (
                         SELECT column_name, data_type
@@ -47,6 +47,18 @@ var Queries = map[string]string{
                         mtc.column_name,
                         ic.table_name;
                     `,
+    "list-nodes": `SELECT
+                        t.table_name AS node,
+                        c.column_name AS field,
+                        c.data_type AS field_type
+                    FROM
+                        information_schema.tables AS t
+                    JOIN
+                        information_schema.columns AS c ON t.table_name = c.table_name AND t.table_schema = c.table_schema
+                    WHERE
+                        t.table_schema = 'public'
+                    ORDER BY
+                        t.table_name, c.ordinal_position;`,
 }
 
 type RequestData struct {
@@ -849,6 +861,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+    http.Handle("/", http.FileServer(http.Dir("../fe")))
 
 	http.HandleFunc("/api/help/", LoggingMiddleware(QueriesHandler))
 	http.HandleFunc("/api/", LoggingMiddleware(QueryHandler))
@@ -859,7 +872,7 @@ func main() {
 	http.ListenAndServe(SERVER_HOST, nil)
 }
 func logMemoryUsagePeriodically() {
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(200 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
 		var m runtime.MemStats
