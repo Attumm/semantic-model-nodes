@@ -1,10 +1,9 @@
-
-import json
-
 import os
-import json
 import re
 import csv
+import json
+
+from collections import defaultdict
 
 uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
@@ -14,6 +13,7 @@ def is_uuid(item):
 
 def get_data(data_dir, uuid):
     return json.load(open(data_dir + uuid))
+
 
 def get_dsm_psql_types(path_to_csv='dsm_psql_types.csv'):
     dsm_to_psql, psql_to_dsm = {}, {}
@@ -35,7 +35,6 @@ def get_postgres_type(dsm_type, field_type):
     return higher_type or base_type
 
 
-
 def generate_create_table_sql(table_name, columns_data):
     sql_parts = [f"CREATE TABLE \"{table_name}\" ("]
 
@@ -52,7 +51,6 @@ def generate_create_table_sql(table_name, columns_data):
 
     sql_parts.append(");")
     return "\n".join(sql_parts)
-
 
 
 def generate_insert_template(table_name, columns):
@@ -77,7 +75,6 @@ def datas():
 
 # Consolidate table structures
 tables = {}
-from collections import defaultdict
 
 tables = {}
 for data in datas():
@@ -111,7 +108,6 @@ insert_templates = {}
 for table_name in tables.keys():
     columns = list(tables[table_name].keys())
     insert_templates[table_name] = generate_insert_template(table_name, columns)
-
 
 
 def parse_value_insert(item, dsm_type, field_type):
@@ -173,7 +169,6 @@ def get_row_level_read_access(record):
     return list(row_level_rbac_read)
 
 
-
 def create_formatted_data(record):
     formatted_data = defaultdict(default_value)
     if record["_dn"] != ["standard"]:
@@ -183,7 +178,6 @@ def create_formatted_data(record):
         #value = parse_value_insert(record[column], record.get(f"_{column}_type", "string"), record.get(f"_{column}_field_type")) 
         value = parse_value_csv(record[column], record.get(f"_{column}_type", "string"), record.get(f"_{column}_field_type")) 
         formatted_data[column] = value
-
 
     return formatted_data
 
@@ -209,7 +203,6 @@ with open('inserts.sql', 'w') as f:
             f.write("\n")
 
 """
-import csv
 
 class CSVWriter():
     def __init__(self, unique_columns_per_table):

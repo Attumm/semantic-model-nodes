@@ -47,18 +47,24 @@ var Queries = map[string]string{
                         mtc.column_name,
                         ic.table_name;
                     `,
-    "list-nodes": `SELECT
+    "list-nodes": `
+                    SELECT
                         t.table_name AS node,
                         c.column_name AS field,
-                        c.data_type AS field_type
+                        c.data_type AS field_type,
+                        coalesce(sut.n_live_tup, 0)::integer AS row_count
                     FROM
                         information_schema.tables AS t
                     JOIN
                         information_schema.columns AS c ON t.table_name = c.table_name AND t.table_schema = c.table_schema
+                    LEFT JOIN
+                        pg_stat_user_tables sut ON t.table_name = sut.relname
                     WHERE
                         t.table_schema = 'public'
                     ORDER BY
-                        t.table_name, c.ordinal_position;`,
+                        t.table_name, c.ordinal_position;
+
+                    `,
 }
 
 type RequestData struct {

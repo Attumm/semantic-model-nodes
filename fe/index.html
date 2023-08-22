@@ -56,6 +56,11 @@ text {
         <svg width="20000" height="2000" overflow="scroll"></svg>
 
     </div>
+
+    <!-- information amount -->
+    <div style="position: absolute; top: 0; right: 0; padding: 24px;">
+        Row Count: {{ current_row_count }}
+    </div>
 </div>
 
 <!-- Some basic styles for visibility -->
@@ -78,6 +83,7 @@ new Vue({
         //layoutOrientation: 'vertical',
         nodesData: {},  // Loaded from API
         activeNode: null,
+        current_row_count: "",
         graph: {
             nodes: [],
             links: []
@@ -103,7 +109,28 @@ new Vue({
                     this.nodesData = data;
                 });
         },
+        findNodeAndSetRowCount(node) {
+            let foundNode = null;
+
+            // Loop over keys in the nodesData object
+            for (let key in this.nodesData) {
+                // Find the node within the current array
+                foundNode = this.nodesData[key].find(entry => entry.node === node);
+                
+                // If the node is found, break out of the loop for efficiency
+                if (foundNode) {
+                    break;
+                }
+            }
+
+            // If the node was found in the nested arrays, update the current_row_count
+            if (foundNode) {
+                this.current_row_count = foundNode.row_count;
+            }
+        },
+
         setActiveNode(node) {
+            this.findNodeAndSetRowCount(node);
     this.graph.nodes = [];
     this.graph.links = [];
 
@@ -237,48 +264,114 @@ function dragged(event, d) {
         //Y_level[d.level];
     }
 
-    function removeNode(nodeData) {
+    function removeNode(nodeData, event) {
+        console.log(event)
+        console.log(this)
+
+    // Capture the slot of the node to be removed
+    const removedNodeSlot = nodeData.slot;
+
     // Remove the node from graph.nodes
     const nodeIndex = this.graph.nodes.indexOf(nodeData);
     if (nodeIndex > -1) {
         this.graph.nodes.splice(nodeIndex, 1);
     }
 
-    // Remove associated links from graph.links
-    const linksToRemove = this.graph.links.filter(link => link.source === nodeData || link.target === nodeData);
+    // Find any links where the source or target is the nodeData and the other end is of type operator
+    const linksToRemove = this.graph.links.filter(link => {
+        return (link.source === nodeData || link.target === nodeData) && (link.source.type === 'operator' || link.target.type === 'operator');
+    });
+
+    const operatorNodesToRemove = [];
+
     linksToRemove.forEach(link => {
+        // Store the operator nodes that are associated with these links for removal
+        if (link.source.type === 'operator' && operatorNodesToRemove.indexOf(link.source) === -1) {
+            operatorNodesToRemove.push(link.source);
+        } else if (link.target.type === 'operator' && operatorNodesToRemove.indexOf(link.target) === -1) {
+            operatorNodesToRemove.push(link.target);
+        }
+
+        // Remove the link itself
         const linkIndex = this.graph.links.indexOf(link);
         if (linkIndex > -1) {
             this.graph.links.splice(linkIndex, 1);
         }
     });
 
-    // Now, redraw the graph or refresh the visualization
-    //renderGraph();
+    // Now, let's remove the operator nodes that were linked to the nodeData
+    operatorNodesToRemove.forEach(operatorNode => {
+        const nodeIndex = this.graph.nodes.indexOf(operatorNode);
+        if (nodeIndex > -1) {
+            this.graph.nodes.splice(nodeIndex, 1);
+        }
+    });
+
+
+    // Adjust the slot values of all nodes that come after the removed node
+    this.graph.nodes.forEach(node => {
+        if (node.type === "field" && node.slot > removedNodeSlot) {
+            node.slot -= 1;
+        }
+    });
+
+    // Let the drawing function handle positioning and rendering
     this.drawGraph();
-    
-}
-function openOperatorDialog(nodeData) {
+}   
+
+function openOperatorDialog(nodeData, event) {
     const div = document.createElement('div');
+    const currentContext = this;  // Saving the current context
+    console.log(nodeData)
+    console.log(event)
+    console.log("okay", this.graph)
+    console.log("okay", this)
+
+    div.style.position = 'absolute';
+    div.style.left = `${event.pageX}px`;
+    div.style.top = `${event.pageY}px`;
+    div.style.zIndex = '1000'; 
+
     div.innerHTML = `
         <label>Enter Operator Details:</label>
         <input type="text" id="operatorInput" />
-        <button onclick="handleOperatorSubmit()">OK</button>
+        <button onclick="submitHandler()">OK</button>
     `;
-
     document.body.appendChild(div);
 
-    // Define the handler for when the dialog is submitted
-    window.handleOperatorSubmit = function() {
+    const submitHandler = () => {
         const inputValue = document.getElementById('operatorInput').value;
+        // push to the side, if the position is taken
+        const slotIsTaken = currentContext.graph.nodes.some(node => node.slot === nodeData.slot && node.type === 'operator');
+
+        if (slotIsTaken) {
+            currentContext.graph.nodes.forEach(node => {
+                if (node.slot >= nodeData.slot && node.type === 'operator') {
+                    node.slot += 1;
+                }
+            });
+        }
+        // create a new node
         if (inputValue) {
-            // Make the API call or any other logic you need with the inputValue
-            // Example: createOperator(nodeData, inputValue);
+            const operatorNode = {
+                type: 'operator',
+                name: inputValue,
+                slot: nodeData.slot,
+                level: 2
+            };
+
+            currentContext.graph.nodes.push(operatorNode);
+            currentContext.graph.links.push({ source:nodeData, target: operatorNode });
+            console.log("New operator node added:", operatorNode); 
+
+            currentContext.drawGraph();
         }
 
         // Remove the dialog after submission
         document.body.removeChild(div);
-    }
+    };
+
+    window.submitHandler = submitHandler;  // You might want to be careful with this, as it attaches the function to the global window object
 }
 
 function openLinkDialog(nodeData) {
@@ -304,21 +397,20 @@ function openLinkDialog(nodeData) {
     }
 }
 
-    function handleContextMenuClick(option, nodeData) {
-    console.log('joi', option)
-    console.log('eee', nodeData)
+    function handleContextMenuClick(option, nodeData, event) {
+    console.log(this)
     switch (option) {
         case 'Remove':
             console.log("remove")
-            removeNode(nodeData);
+            removeNode(nodeData, event);
             break;
         case 'Operator':
              console.log("operator")
-            openOperatorDialog(nodeData);
+             openOperatorDialog(nodeData, event);
             break;
         case 'Link':
             console.log("link")
-            openLinkDialog(nodeData);
+            openLinkDialog(nodeData, event);
             break;
     }
 }
@@ -343,14 +435,16 @@ function createContextMenu(event, d) {
     .enter()
     .append('p')
     .text(d => d)
-    .on('click', function() { // Don't pass in option here
-        const selectedOption = d3.select(this).text();  // Get the text of the clicked option
-        handleContextMenuClick(selectedOption, d);  
+    .on('click', function(event) {  // Note the event argument here.
+        const selectedOption = d3.select(this).text();
+        handleContextMenuClick(selectedOption, d, event);  
         d3.selectAll('.context-menu').remove();
     });
 }
 
 removeNode = removeNode.bind(this);
+openLinkDialog = openLinkDialog.bind(this)
+openOperatorDialog = openOperatorDialog.bind(this)
 handleContextMenuClick = handleContextMenuClick.bind(this);
 createContextMenu = createContextMenu.bind(this);
 
