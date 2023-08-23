@@ -27,10 +27,7 @@
     cursor: pointer;
 }
 
-.context-menu p {
-    margin: 0;
-    padding: 5px;
-}
+
 /* d3.js workaround for text */
 text {
     pointer-events: none;
@@ -84,6 +81,7 @@ new Vue({
         nodesData: {},  // Loaded from API
         activeNode: null,
         current_row_count: "",
+        type_operators: {},
         graph: {
             nodes: [],
             links: []
@@ -93,7 +91,6 @@ new Vue({
     methods: {
         
         toggleLayout() {
-        console.log(this.layoutOrientation )
         if (this.layoutOrientation === 'horizontal') {
             this.layoutOrientation = 'vertical';
         } else {
@@ -109,10 +106,17 @@ new Vue({
                     this.nodesData = data;
                 });
         },
+        fetchTypeOperators() {
+            fetch("api/sm-query-options/")
+                .then(response => response.json())
+                .then(data => {
+                    this.type_operators = data["type_operators"];
+                });
+        },
         findNodeAndSetRowCount(node) {
             let foundNode = null;
 
-            // Loop over keys in the nodesData object
+            // Loop over  keys in the nodesData object
             for (let key in this.nodesData) {
                 // Find the node within the current array
                 foundNode = this.nodesData[key].find(entry => entry.node === node);
@@ -150,7 +154,9 @@ new Vue({
             type: 'field',
             name: field.field,
             slot: index,
-            level: 1
+            level: 1,
+            parent: field.node,
+            field_type: field.field_type
         };
 
         this.graph.nodes.push(fieldNode);
@@ -198,8 +204,14 @@ drawGraph() {
         .attr("height", 30)
         .attr("rx", 10)
         .attr("ry", 10)
-        .attr("fill", d => d.type === 'node' ? "#69a3b2" : "#d1c4e9")
-        .attr("x", d => d.fx - 50)  // Half the width to center
+        .attr("fill", d => {
+    if (d.type === 'node') return "#69a3b2";
+    if (d.type === 'field') return "#d1c4e9";
+    if (d.type === 'operator') return "#d4af37"; // Adjusted color for operator
+    if (d.type === 'link') return "#c15c22";    // Adjusted color for link
+    return "gray";  // Default color in case none of the types matc
+
+})   .attr("x", d => d.fx - 50)  // Half the width to center
         .attr("y", d => d.fy - 15)  // Half the height to center
         .call(d3.drag()
             .on("start", dragstarted.bind(this))
@@ -220,10 +232,6 @@ drawGraph() {
     .attr("text-anchor", "right")
     .attr("x", d => d.fx)
     .attr("y", d => d.fy) 
-
-   
-
-
 
     function dragstarted(event, d) {
         if (!event.active) simulation.alphaTarget(0.3).restart();
@@ -277,10 +285,10 @@ function dragged(event, d) {
         this.graph.nodes.splice(nodeIndex, 1);
     }
 
-    // Find any links where the source or target is the nodeData and the other end is of type operator
-    const linksToRemove = this.graph.links.filter(link => {
-        return (link.source === nodeData || link.target === nodeData) && (link.source.type === 'operator' || link.target.type === 'operator');
-    });
+const linksToRemove = this.graph.links.filter(link => {
+    return link.source === nodeData || link.target === nodeData;
+});
+
 
     const operatorNodesToRemove = [];
 
@@ -318,32 +326,36 @@ function dragged(event, d) {
     // Let the drawing function handle positioning and rendering
     this.drawGraph();
 }   
-
 function openOperatorDialog(nodeData, event) {
     const div = document.createElement('div');
-    const currentContext = this;  // Saving the current context
-    console.log(nodeData)
-    console.log(event)
-    console.log("okay", this.graph)
-    console.log("okay", this)
+    const currentContext = this;
 
     div.style.position = 'absolute';
     div.style.left = `${event.pageX}px`;
     div.style.top = `${event.pageY}px`;
     div.style.zIndex = '1000'; 
 
+    const optionsArray = this.type_operators[nodeData["field_type"]];
+    console.log(nodeData["field_type"])
+    let optionsHTML = optionsArray.map(option => `<option value="${option}">${option}</option>`).join('');
+
     div.innerHTML = `
+        <label>Operator Type:</label>
+        <select id="operatorOption">${optionsHTML}</select>
+        
         <label>Enter Operator Details:</label>
         <input type="text" id="operatorInput" />
+        
         <button onclick="submitHandler()">OK</button>
     `;
+
     document.body.appendChild(div);
 
     const submitHandler = () => {
+        const selectedOption = document.getElementById('operatorOption').value;
         const inputValue = document.getElementById('operatorInput').value;
-        // push to the side, if the position is taken
-        const slotIsTaken = currentContext.graph.nodes.some(node => node.slot === nodeData.slot && node.type === 'operator');
 
+        const slotIsTaken = currentContext.graph.nodes.some(node => node.slot === nodeData.slot && node.type === 'operator');
         if (slotIsTaken) {
             currentContext.graph.nodes.forEach(node => {
                 if (node.slot >= nodeData.slot && node.type === 'operator') {
@@ -351,28 +363,30 @@ function openOperatorDialog(nodeData, event) {
                 }
             });
         }
-        // create a new node
+            
         if (inputValue) {
             const operatorNode = {
                 type: 'operator',
-                name: inputValue,
+                name: selectedOption + ": " + inputValue,
                 slot: nodeData.slot,
-                level: 2
+                level: 2,
+                operator_type: "filter",
+                operator: selectedOption,
+                operator_input: inputValue
             };
 
             currentContext.graph.nodes.push(operatorNode);
-            currentContext.graph.links.push({ source:nodeData, target: operatorNode });
-            console.log("New operator node added:", operatorNode); 
+            currentContext.graph.links.push({ source: nodeData, target: operatorNode });
 
             currentContext.drawGraph();
         }
 
-        // Remove the dialog after submission
         document.body.removeChild(div);
     };
 
-    window.submitHandler = submitHandler;  // You might want to be careful with this, as it attaches the function to the global window object
+    window.submitHandler = submitHandler;
 }
+
 
 function openLinkDialog(nodeData) {
     const div = document.createElement('div');
@@ -391,7 +405,6 @@ function openLinkDialog(nodeData) {
             // Make the API call or any other logic you need with the inputValue
             // Example: createLink(nodeData, inputValue);
         }
-
         // Remove the dialog after submission
         document.body.removeChild(div);
     }
@@ -423,24 +436,39 @@ function createContextMenu(event, d) {
     const menu = d3.select('body')
         .append('div')
         .attr('class', 'context-menu')
-        .style('left', `${event.pageX}px`)
-        .style('top', `${event.pageY}px`)
-        .style('zIndex', '1000');  // Set a high zIndex value
+        .style('left', `${event.pageX + 10}px`)  // slight offset to not directly open under mouse
+        .style('top', `${event.pageY + 10}px`)
+        .style('zIndex', '1000')
+        .style('border', '1px solid #ccc')    // Border around the context menu
+        .style('border-radius', '4px')       // Rounded corners
+        .style('background-color', '#f5f5f5')// Background color
+        .style('font-family', 'Arial, sans-serif') // Font 
+        .style('box-shadow', '3px 3px 10px rgba(0, 0, 0, 0.2)'); // Drop shadow
 
     const options = ['Remove', 'Operator', 'Link'];
 
     // Append our three options to the menu
     menu.selectAll('p')
-    .data(options)
-    .enter()
-    .append('p')
-    .text(d => d)
-    .on('click', function(event) {  // Note the event argument here.
-        const selectedOption = d3.select(this).text();
-        handleContextMenuClick(selectedOption, d, event);  
-        d3.selectAll('.context-menu').remove();
-    });
+        .data(options)
+        .enter()
+        .append('p')
+        .text(d => d)
+        .style('margin', '0')              // Remove margin
+        .style('padding', '10px 15px')     // Padding for each option
+        .style('cursor', 'pointer')        // Hand cursor on hover
+        .on('mouseover', function() {
+            d3.select(this).style('background-color', '#e5e5e5');  // Change background color on hover
+        })
+        .on('mouseout', function() {
+            d3.select(this).style('background-color', '#f5f5f5');  // Reset background color
+        })
+        .on('click', function(event) {
+            const selectedOption = d3.select(this).text();
+            handleContextMenuClick(selectedOption, d, event);
+            d3.selectAll('.context-menu').remove();
+        });
 }
+
 
 removeNode = removeNode.bind(this);
 openLinkDialog = openLinkDialog.bind(this)
@@ -470,6 +498,7 @@ createContextMenu = createContextMenu.bind(this);
     },
     mounted() {
         this.fetchNodes();
+        this.fetchTypeOperators();
     }
 });
 

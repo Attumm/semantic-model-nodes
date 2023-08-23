@@ -47,7 +47,7 @@ var Queries = map[string]string{
                         mtc.column_name,
                         ic.table_name;
                     `,
-    "list-nodes": `
+	"list-nodes": `
                     SELECT
                         t.table_name AS node,
                         c.column_name AS field,
@@ -546,7 +546,8 @@ func parseInput(r *http.Request) (*RequestData, error) {
 	}
 
 	if len(params) != countPlaceholders(query) {
-		return nil, fmt.Errorf("Endpoint %s expects %d parameters, but got %d", noun, countPlaceholders(query), params)
+        return nil, fmt.Errorf("Endpoint %s expects %d parameters, but got %d", noun, countPlaceholders(query), len(params))
+
 	}
 
 	format := r.URL.Query().Get("format")
@@ -859,6 +860,32 @@ func LoggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 const SERVER_HOST = ":8080"
 
+
+type SMQueryOptions struct {
+    TypeOperators map[string][]string `json:"type_operators"`
+}
+
+
+var AllowedOperators = map[string][]string{
+	"text":     {"MATCH", "NOTMATCH", "IMATCH", "STARTSWITH", "ISTARTSWITH", "ENDSWITH", "IENDSWITH", "CONTAINS", "ICONTAINS"},
+	"cidr":     {"MATCH", "NEQ", "CONTAINED_BY_OR_EQ", "CONTAINS_OR_EQ", "CONTAINED_BY", "CONTAINS", "IS_SUPERNET_OR_EQ", "IS_SUBNET_OR_EQ", "IS_SUPERNET", "IS_SUBNET"},
+	"int":      {"MATCH", "GT", "LT", "LTE", "GTE", "IN", "NOTIN", "NEQ"},
+	"uuid":     {"MATCH", "NOTMATCH"},
+	"timezone": {"MATCH", "NOTMATCH", "BEFORE", "AFTER", "ON_OR_BEFORE", "ON_OR_AFTER", "BETWEEN", "NOT_BETWEEN", "IN", "NOTIN"},
+	"array": {"ARRAY_CONTAINS", "ARRAY_IS_CONTAINED", "ARRAY_OVERLAPS", "ARRAY_MATCH", "ARRAY_NOTMATCH", "ARRAY_ELEMENT_MATCH", "ARRAY_CONCAT", "ARRAY_REMOVE_ELEMENT",
+		"ARRAY_HAS_ELEMENT", "ARRAY_GT", "ARRAY_LT", "ARRAY_GTE", "ARRAY_LTE"},
+}
+
+func SMQueryOptionsHandler(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    response := SMQueryOptions{
+        TypeOperators: AllowedOperators,
+    }
+    json.NewEncoder(w).Encode(response)
+}
+
+
+
 func main() {
 	var err error
 	// Connect to the "testdb" database
@@ -867,7 +894,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-    http.Handle("/", http.FileServer(http.Dir("../fe")))
+	http.Handle("/", http.FileServer(http.Dir("../fe")))
+
+	http.HandleFunc("/api/sm-query-options/", LoggingMiddleware(SMQueryOptionsHandler))
 
 	http.HandleFunc("/api/help/", LoggingMiddleware(QueriesHandler))
 	http.HandleFunc("/api/", LoggingMiddleware(QueryHandler))

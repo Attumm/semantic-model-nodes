@@ -38,7 +38,18 @@ var SQLOperators = map[string]string{
 	"ON_OR_AFTER":        ">= %s",
 	"BETWEEN":            "BETWEEN %s AND %s",
 	"NOT_BETWEEN":        "NOT BETWEEN %s AND %s",
-	// ... add others as needed
+    "ARRAY_CONTAINS": " @> ARRAY[%s]", // Array contains
+    "ARRAY_IS_CONTAINED": "<@ ARRAY[%s]", // Array is contained by
+    "ARRAY_OVERLAPS": "&& ARRAY[%s]", // Array overlaps
+    "ARRAY_MATCH": "= ARRAY[%s]",// Array equality
+    "ARRAY_NOTMATCH": "!= ARRAY[%s]", // Array inequality
+    "ARRAY_ELEMENT_MATCH": "ANY(%s)", // Array element equality (checks if array has the element)
+    "ARRAY_REMOVE_ELEMENT": "- %s", // Array remove a specified element (for int array example)
+    "ARRAY_HAS_ELEMENT": "? %s", // Array contains a specified element (checks if array has the element, alternative way)
+    "ARRAY_GT": "> ARRAY[%s]", // Greater than, compares arrays lexicographically
+    "ARRAY_LT": "< ARRAY[%s]", // Less than
+    "ARRAY_GTE": ">= ARRAY[%s]", // Greater than or equal
+    "ARRAY_LTE": "<= ARRAY[%s]", // Less than or equal
 }
 
 // 2. Allowed Operator Map
@@ -48,7 +59,8 @@ var AllowedOperators = map[string][]string{
 	"int":      {"MATCH", "GT", "LT", "LTE", "GTE", "IN", "NOTIN", "NEQ"},
 	"uuid":     {"MATCH", "NOTMATCH"},
 	"timezone": {"MATCH", "NOTMATCH", "BEFORE", "AFTER", "ON_OR_BEFORE", "ON_OR_AFTER", "BETWEEN", "NOT_BETWEEN", "IN", "NOTIN"},
-	// ... add others as needed
+    "array": {"ARRAY_CONTAINS", "ARRAY_IS_CONTAINED", "ARRAY_OVERLAPS", "ARRAY_MATCH", "ARRAY_NOTMATCH", "ARRAY_ELEMENT_MATCH", "ARRAY_CONCAT", "ARRAY_REMOVE_ELEMENT",
+        "ARRAY_HAS_ELEMENT", "ARRAY_GT", "ARRAY_LT", "ARRAY_GTE", "ARRAY_LTE"},
 }
 
 func isValidOperatorForType(dataType, operatorKey string) bool {
