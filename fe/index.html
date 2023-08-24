@@ -89,15 +89,42 @@ new Vue({
         fieldOrder: [],
     },
     methods: {
-        
-        toggleLayout() {
-        if (this.layoutOrientation === 'horizontal') {
-            this.layoutOrientation = 'vertical';
-        } else {
-            this.layoutOrientation = 'horizontal';
-        }
+        generateQueryString() {
+            // Construct the "dn" part of the string using activeNode's name
+            let queryString = "dn=" + this.activeNode.name;
 
-        this.drawGraph();
+            // Map the field nodes to the desired string format and sort by slot
+            let fieldStrings = this.graph.nodes
+                                .filter(node => node.type === "field")
+                                .sort((a, b) => a.slot - b.slot)
+                                .map(field => `field=${field.parent}.${field.name}`);
+
+            // Filter the operator nodes that are of type "filter", sort by slot,
+            // and then map to the desired string format
+            let filterStrings = this.graph.nodes
+                                .filter(node => node.type === "operator" && node.operator_type === "filter")
+                                .sort((a, b) => a.slot - b.slot)
+                                .map(filter => `filter=${filter.operator}:${filter.parent}.${filter.field_name}:${filter.operator_input}`);
+
+            // If there are fieldStrings or filterStrings, prepend them with an "&"
+            if (fieldStrings.length > 0) {
+                queryString += "&" + fieldStrings.join("&");
+            }
+
+            if (filterStrings.length > 0) {
+                queryString += "&" + filterStrings.join("&");
+            }
+            return queryString;
+    },
+        toggleLayout() {
+            console.log(this.generateQueryString())
+            if (this.layoutOrientation === 'horizontal') {
+                this.layoutOrientation = 'vertical';
+            } else {
+                this.layoutOrientation = 'horizontal';
+            }
+
+            this.drawGraph();
     },
         fetchNodes() {
             fetch("api/list-nodes?format=json&groupby=node")
@@ -363,13 +390,14 @@ function openOperatorDialog(nodeData, event) {
                 }
             });
         }
-            
         if (inputValue) {
             const operatorNode = {
                 type: 'operator',
                 name: selectedOption + ": " + inputValue,
                 slot: nodeData.slot,
                 level: 2,
+                parent: nodeData.parent,
+                field_name: nodeData.name,
                 operator_type: "filter",
                 operator: selectedOption,
                 operator_input: inputValue

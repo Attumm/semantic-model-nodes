@@ -546,7 +546,7 @@ func parseInput(r *http.Request) (*RequestData, error) {
 	}
 
 	if len(params) != countPlaceholders(query) {
-        return nil, fmt.Errorf("Endpoint %s expects %d parameters, but got %d", noun, countPlaceholders(query), len(params))
+		return nil, fmt.Errorf("Endpoint %s expects %d parameters, but got %d", noun, countPlaceholders(query), len(params))
 
 	}
 
@@ -860,31 +860,27 @@ func LoggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 const SERVER_HOST = ":8080"
 
-
 type SMQueryOptions struct {
-    TypeOperators map[string][]string `json:"type_operators"`
+	TypeOperators map[string][]string `json:"type_operators"`
 }
 
-
 var AllowedOperators = map[string][]string{
-	"text":     {"MATCH", "NOTMATCH", "IMATCH", "STARTSWITH", "ISTARTSWITH", "ENDSWITH", "IENDSWITH", "CONTAINS", "ICONTAINS"},
-	"cidr":     {"MATCH", "NEQ", "CONTAINED_BY_OR_EQ", "CONTAINS_OR_EQ", "CONTAINED_BY", "CONTAINS", "IS_SUPERNET_OR_EQ", "IS_SUBNET_OR_EQ", "IS_SUPERNET", "IS_SUBNET"},
-	"int":      {"MATCH", "GT", "LT", "LTE", "GTE", "IN", "NOTIN", "NEQ"},
-	"uuid":     {"MATCH", "NOTMATCH"},
-	"timezone": {"MATCH", "NOTMATCH", "BEFORE", "AFTER", "ON_OR_BEFORE", "ON_OR_AFTER", "BETWEEN", "NOT_BETWEEN", "IN", "NOTIN"},
-	"array": {"ARRAY_CONTAINS", "ARRAY_IS_CONTAINED", "ARRAY_OVERLAPS", "ARRAY_MATCH", "ARRAY_NOTMATCH", "ARRAY_ELEMENT_MATCH", "ARRAY_CONCAT", "ARRAY_REMOVE_ELEMENT",
-		"ARRAY_HAS_ELEMENT", "ARRAY_GT", "ARRAY_LT", "ARRAY_GTE", "ARRAY_LTE"},
+	"text":     {"match", "notmatch", "imatch", "startswith", "istartswith", "endswith", "iendswith", "contains", "icontains"},
+	"cidr":     {"match", "neq", "contained_by_or_eq", "contains_or_eq", "contained_by", "contains", "is_supernet_or_eq", "is_subnet_or_eq", "is_supernet", "is_subnet"},
+	"int":      {"match", "gt", "lt", "lte", "gte", "in", "notin", "neq"},
+	"uuid":     {"match", "notmatch"},
+	"timezone": {"match", "notmatch", "before", "after", "on_or_before", "on_or_after", "between", "not_between", "in", "notin"},
+	"array": {"array_contains", "array_is_contained", "array_overlaps", "array_match", "array_notmatch", "array_element_match", "array_concat", "array_remove_element",
+		"array_has_element", "array_gt", "array_lt", "array_gte", "array_lte"},
 }
 
 func SMQueryOptionsHandler(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    response := SMQueryOptions{
-        TypeOperators: AllowedOperators,
-    }
-    json.NewEncoder(w).Encode(response)
+	w.Header().Set("Content-Type", "application/json")
+	response := SMQueryOptions{
+		TypeOperators: AllowedOperators,
+	}
+	json.NewEncoder(w).Encode(response)
 }
-
-
 
 func main() {
 	var err error
