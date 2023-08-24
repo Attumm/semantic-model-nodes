@@ -186,7 +186,6 @@ class SafeDict(dict):
     def __missing__(self, key):
         return 'NULL'
 
-from collections import defaultdict
 def default_value():
     return 'NULL'
 

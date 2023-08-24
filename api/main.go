@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	//"encoding/base64"
 	"bytes"
@@ -69,6 +70,7 @@ var Queries = map[string]string{
 
 type RequestData struct {
 	Format      string
+	RawQuery    string
 	Query       string
 	GroupByKey  string
 	GroupByKey2 string
@@ -127,7 +129,67 @@ func streamJSONGroupedDeep(w http.ResponseWriter, rows *sql.Rows, requestData *R
 	}
 }
 
+// shoudl be optimized
 func streamJSON(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
+	cols, err := rows.Columns()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	// Begin the JSON array
+	w.Write([]byte("["))
+
+	isFirst := true
+	for rows.Next() {
+		values := make([]interface{}, len(cols))
+		valuePtrs := make([]interface{}, len(cols))
+
+		for i := 0; i < len(cols); i++ {
+			valuePtrs[i] = &values[i]
+		}
+
+		rows.Scan(valuePtrs...)
+
+		var entryBuilder strings.Builder
+		entryBuilder.WriteString("{")
+
+		for i, colName := range cols {
+			var v interface{} = values[i]
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+
+			// Escape strings and handle special JSON characters
+			colNameJSON, _ := json.Marshal(colName)
+			valueJSON, _ := json.Marshal(v)
+
+			if i != 0 {
+				entryBuilder.WriteString(",")
+			}
+			entryBuilder.WriteString(fmt.Sprintf("%s:%s", colNameJSON, valueJSON))
+		}
+
+		entryBuilder.WriteString("}")
+
+		// If it's not the first row, write a comma separator
+		if isFirst {
+			isFirst = false
+		} else {
+			w.Write([]byte(","))
+		}
+
+		w.Write([]byte(entryBuilder.String()))
+	}
+
+	// End the JSON array
+	w.Write([]byte("]"))
+}
+
+func streamJSON_no_order(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
 
 	cols, err := rows.Columns()
 	if err != nil {
@@ -534,6 +596,29 @@ func parseURL(r *http.Request) (noun string, params []string, err error) {
 	return noun, params, nil
 }
 
+func parseInputGen(r *http.Request) (*RequestData, error) {
+	rawQuery := r.URL.RawQuery
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "json"
+	}
+
+	groupByKey := r.URL.Query().Get("groupby")
+	if format == "json" && groupByKey != "" {
+		format = "jsonGrouped"
+	}
+	groupByKey2 := r.URL.Query().Get("groupby2")
+
+	reqData := &RequestData{
+		Format:      format,
+		RawQuery:    rawQuery,
+		GroupByKey:  groupByKey,
+		GroupByKey2: groupByKey2,
+	}
+
+	return reqData, nil
+}
+
 func parseInput(r *http.Request) (*RequestData, error) {
 	noun, params, err := parseURL(r)
 	if err != nil {
@@ -866,7 +951,8 @@ type SMQueryOptions struct {
 
 var AllowedOperators = map[string][]string{
 	"text":     {"match", "notmatch", "imatch", "startswith", "istartswith", "endswith", "iendswith", "contains", "icontains"},
-	"cidr":     {"match", "neq", "contained_by_or_eq", "contains_or_eq", "contained_by", "contains", "is_supernet_or_eq", "is_subnet_or_eq", "is_supernet", "is_subnet"},
+	"cidr":     {"match", "neq", "contained_by_or_eq", "contains_or_eq", "contained_by", "ip_contains"}, // "is_supernet_or_eq", "is_subnet_or_eq", "is_supernet", "is_subnet"},
+	"inet":     {"match", "neq", "contained_by_or_eq", "contains_or_eq", "contained_by", "ip_contains"}, // "is_supernet_or_eq", "is_subnet_or_eq", "is_supernet", "is_subnet"},
 	"int":      {"match", "gt", "lt", "lte", "gte", "in", "notin", "neq"},
 	"uuid":     {"match", "notmatch"},
 	"timezone": {"match", "notmatch", "before", "after", "on_or_before", "on_or_after", "between", "not_between", "in", "notin"},
@@ -880,6 +966,243 @@ func SMQueryOptionsHandler(w http.ResponseWriter, r *http.Request) {
 		TypeOperators: AllowedOperators,
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+func cleanInputGen(reqData *RequestData) (string, []interface{}, error) {
+	// Convert RawQuery back into url.Values
+	urlQueryParams, err := url.ParseQuery(reqData.RawQuery)
+	if err != nil {
+		return "", nil, err
+	}
+
+	query, valuesMap, err := ConstructQuery(urlQueryParams)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// Assuming valuesMap is map[string]string, but you want to convert values into a slice of interface{}
+	var queryParams []interface{}
+	for _, value := range valuesMap {
+		queryParams = append(queryParams, value)
+	}
+
+	return query, queryParams, nil
+}
+
+func QueryGenHandler(w http.ResponseWriter, r *http.Request) {
+	reqData, err := parseInputGen(r)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	query, params, err := cleanInputGen(reqData)
+	fmt.Println("query", query)
+	fmt.Println("params", params)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	rows, err := DB.Query(query, params...)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer rows.Close()
+
+	encodeResponse(w, rows, reqData)
+}
+func transOperator(operator string) string {
+	return SQLOperators[strings.ToLower(operator)]
+}
+
+type JoinPart struct {
+	JoinType string
+	Left     string
+	Right    string
+}
+
+type FilterPart struct {
+	Operator    string
+	DNPath      string
+	Value       string
+	Placeholder string
+}
+
+type QueryParams struct {
+	MainTable string
+	Selects   []string
+	Joins     []JoinPart
+	Filters   []FilterPart
+}
+
+func ParseQueryParams(params url.Values) (*QueryParams, error) {
+	qp := &QueryParams{}
+	// Parse main table (dn)
+	qp.MainTable = TableNameToSQL(params.Get("dn"))
+	// Parse select fields
+	qp.Selects = params["field"]
+
+	// Parse joins (links)
+	for _, link := range params["link"] {
+		parts := strings.Split(link, ":")
+		var join JoinPart
+
+		switch len(parts) {
+		case 1:
+			join = JoinPart{
+				JoinType: "INNER",
+				Left:     qp.MainTable + ".id",
+				Right:    parts[0],
+			}
+		case 2:
+			join = JoinPart{
+				JoinType: "INNER",
+				Left:     parts[0],
+				Right:    parts[1],
+			}
+		case 3:
+			join = JoinPart{
+				JoinType: strings.ToUpper(parts[0]),
+				Left:     parts[1],
+				Right:    parts[2],
+			}
+		default:
+			return nil, fmt.Errorf("malformed link parameter: %s", link)
+		}
+
+		qp.Joins = append(qp.Joins, join)
+	}
+	// Parse Filters
+	for counter, filter := range params["filter"] {
+		parts := strings.SplitN(filter, ":", 3)
+		fmt.Println(parts)
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("malformed filter parameter: %s", filter)
+		}
+
+		fp := FilterPart{
+			Operator:    transOperator(parts[0]),
+			DNPath:      parts[1],
+			Value:       parts[2],
+			Placeholder: fmt.Sprintf("$%d", counter+1),
+		}
+
+		qp.Filters = append(qp.Filters, fp)
+	}
+	return qp, nil
+}
+
+func TableNameToSQL(tableName string) string {
+	parts := strings.Split(tableName, ".")
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	alias := strings.Join(parts, "_")
+	return fmt.Sprintf("\"%s\" AS %s", tableName, alias)
+}
+
+func ColumnNameToSQL(columnName string) string {
+	parts := strings.Split(columnName, ".")
+	if len(parts) < 2 {
+		return columnName
+	}
+	tableName := strings.Join(parts[:len(parts)-1], "_")
+	return tableName + "." + parts[len(parts)-1]
+}
+
+func ConstructQuery(params url.Values) (string, map[string]string, error) {
+	qp, err := ParseQueryParams(params)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// Building SELECT clause
+	selectClause := "SELECT "
+	if len(qp.Selects) > 0 {
+		correctedSelects := make([]string, len(qp.Selects))
+		for i, s := range qp.Selects {
+			correctedSelects[i] = ColumnNameToSQL(s)
+		}
+		selectClause += strings.Join(correctedSelects, ", ")
+	} else {
+		selectClause += "*"
+	}
+
+	// Building FROM clause
+	fromClause := fmt.Sprintf("FROM %s", qp.MainTable)
+
+	// Building JOIN clause
+	joinClauses := []string{}
+	for _, join := range qp.Joins {
+		joinSQL := fmt.Sprintf("%s JOIN %s ON %s = %s", join.JoinType, TableNameToSQL(strings.Split(join.Right, ".")[0]), ColumnNameToSQL(join.Left), ColumnNameToSQL(join.Right))
+		joinClauses = append(joinClauses, joinSQL)
+	}
+
+	// Building WHERE clause
+	valuesMap := make(map[string]string)
+	whereClauses := []string{}
+	for _, filter := range qp.Filters {
+		operator := fmt.Sprintf(filter.Operator, filter.Placeholder) // format the operator string here
+		filterSQL := fmt.Sprintf("%s %s", ColumnNameToSQL(filter.DNPath), operator)
+		whereClauses = append(whereClauses, filterSQL)
+
+		valuesMap[filter.Placeholder] = filter.Value
+	}
+	whereClause := ""
+	if len(whereClauses) > 0 {
+		whereClause = "WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	// Assembling the final SQL query
+	query := fmt.Sprintf("%s %s %s %s", selectClause, fromClause, strings.Join(joinClauses, " "), whereClause)
+	return query, valuesMap, nil
+}
+
+var SQLOperators = map[string]string{
+	"match":                "= %s",
+	"notmatch":             "!= %s",
+	"imatch":               "ILIKE %s",
+	"startswith":           "LIKE %s || '%%'",
+	"istartswith":          "ILIKE %s || '%%'",
+	"endswith":             "LIKE '%%' || %s",
+	"iendswith":            "ILIKE '%%' || %s",
+	"contains":             "LIKE '%%' || %s || '%%'",
+	"icontains":            "ILIKE '%%' || %s || '%%'",
+	"gt":                   "> %s",
+	"lt":                   "< %s",
+	"lte":                  "<= %s",
+	"gte":                  ">= %s",
+	"in":                   "IN (%s)",
+	"notin":                "NOT IN (%s)",
+	"neq":                  "<> %s",
+	"contained_by_or_eq":   ">>= %s",
+	"contains_or_eq":       "<<= %s",
+	"contained_by":         ">> %s",
+	"ip_contains":          "<< %s",
+	"is_supernet_or_eq":    "~>= %s",
+	"is_subnet_or_eq":      "~<= %s",
+	"is_supernet":          "~> %s",
+	"is_subnet":            "~< %s",
+	"before":               "< %s",
+	"after":                "> %s",
+	"on_or_before":         "<= %s",
+	"on_or_after":          ">= %s",
+	"between":              "BETWEEN %s AND %s",
+	"not_between":          "NOT BETWEEN %s AND %s",
+	"array_contains":       " @> ARRAY[%s]",
+	"array_is_contained":   "<@ ARRAY[%s]",
+	"array_overlaps":       "&& ARRAY[%s]",
+	"array_match":          "= ARRAY[%s]",
+	"array_notmatch":       "!= ARRAY[%s]",
+	"array_element_match":  "ANY(%s)",
+	"array_remove_element": "- %s",
+	"array_has_element":    "? %s",
+	"array_gt":             "> ARRAY[%s]",
+	"array_lt":             "< ARRAY[%s]",
+	"array_gte":            ">= ARRAY[%s]",
+	"array_lte":            "<= ARRAY[%s]",
 }
 
 func main() {
@@ -896,6 +1219,7 @@ func main() {
 
 	http.HandleFunc("/api/help/", LoggingMiddleware(QueriesHandler))
 	http.HandleFunc("/api/", LoggingMiddleware(QueryHandler))
+	http.HandleFunc("/api/gen/", LoggingMiddleware(QueryGenHandler))
 
 	go logMemoryUsagePeriodically()
 
