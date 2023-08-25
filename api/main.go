@@ -14,6 +14,7 @@ import (
 	//"encoding/base64"
 	"bytes"
 	"runtime"
+	"strconv"
 	"time"
 	"unicode"
 
@@ -75,6 +76,7 @@ type RequestData struct {
 	GroupByKey  string
 	GroupByKey2 string
 	Params      []string
+	Limit       string
 }
 
 func streamJSONGroupedDeep(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
@@ -603,6 +605,8 @@ func parseInputGen(r *http.Request) (*RequestData, error) {
 		format = "json"
 	}
 
+	limit := r.URL.Query().Get("limit")
+
 	groupByKey := r.URL.Query().Get("groupby")
 	if format == "json" && groupByKey != "" {
 		format = "jsonGrouped"
@@ -614,6 +618,7 @@ func parseInputGen(r *http.Request) (*RequestData, error) {
 		RawQuery:    rawQuery,
 		GroupByKey:  groupByKey,
 		GroupByKey2: groupByKey2,
+		Limit:       limit,
 	}
 
 	return reqData, nil
@@ -1030,11 +1035,18 @@ type FilterPart struct {
 	Placeholder string
 }
 
+type OrderBy struct {
+	Direction string
+	Field     string
+}
+
 type QueryParams struct {
 	MainTable string
 	Selects   []string
 	Joins     []JoinPart
 	Filters   []FilterPart
+	Order     []OrderBy
+	Limit     string
 }
 
 func ParseQueryParams(params url.Values) (*QueryParams, error) {
@@ -1090,6 +1102,60 @@ func ParseQueryParams(params url.Values) (*QueryParams, error) {
 		}
 
 		qp.Filters = append(qp.Filters, fp)
+	}
+	// Parse orderBy
+	for _, ob := range params["orderby"] {
+        
+		parts := strings.SplitN(ob, ":", 2)
+        fmt.Println("parts", parts)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("malformed orderby parameter: %s", ob)
+		}
+
+		direction := strings.ToUpper(parts[0])
+		if direction != "ASC" && direction != "DESC" {
+			return nil, fmt.Errorf("invalid orderby direction: %s. Only ASC or DESC is allowed", parts[0])
+		}
+
+    // Splitting the field by the last "."
+        lastDotIndex := strings.LastIndex(parts[1], ".")
+        fieldParts := []string{}
+        if lastDotIndex != -1 {
+            fieldParts = []string{parts[1][:lastDotIndex], parts[1][lastDotIndex+1:]}
+            fmt.Println(fieldParts)
+        } else {
+            fmt.Println("Dot not found!")
+        }
+		if len(fieldParts) != 2 {
+			return nil, fmt.Errorf("malformed orderby field: %s", parts[1])
+		}
+		fmt.Println("fieldparts: ", fieldParts)
+		// Convert table name to its alias using the TableNameToSQL function
+		tableAlias := TableNameToSQL(fieldParts[0])
+		fmt.Println("TableAlis: ", tableAlias)
+		// Since TableNameToSQL() adds an "AS", we split by space and take the last part as the alias
+		tableAliasParts := strings.Split(tableAlias, " ")
+		tableAlias = tableAliasParts[len(tableAliasParts)-1]
+
+		field := fieldParts[1]
+
+		orderBy := OrderBy{
+			Direction: direction,
+			Field:     tableAlias + "." + field, // Use the alias for the table name
+		}
+		fmt.Println("orderBy: ", orderBy)
+		fmt.Println("TableAlis: ", tableAlias)
+		fmt.Println("tableAliasParts: ", tableAliasParts)
+
+		qp.Order = append(qp.Order, orderBy)
+	}
+
+	// Parse Limit
+	qp.Limit = params.Get("limit")
+	if qp.Limit != "" {
+		if _, err := strconv.Atoi(qp.Limit); err != nil {
+			return nil, fmt.Errorf("invalid limit value: %s", qp.Limit)
+		}
 	}
 	return qp, nil
 }
@@ -1154,9 +1220,24 @@ func ConstructQuery(params url.Values) (string, map[string]string, error) {
 	if len(whereClauses) > 0 {
 		whereClause = "WHERE " + strings.Join(whereClauses, " AND ")
 	}
+	// Building orderby
+	orderClause := ""
+	if len(qp.Order) > 0 {
+		orderParts := make([]string, len(qp.Order))
+		for i, order := range qp.Order {
+			orderParts[i] = fmt.Sprintf("%s %s", order.Field, order.Direction)
+		}
+		orderClause = "ORDER BY " + strings.Join(orderParts, ", ")
+	}
 
-	// Assembling the final SQL query
-	query := fmt.Sprintf("%s %s %s %s", selectClause, fromClause, strings.Join(joinClauses, " "), whereClause)
+	// Building limit
+	limitClause := ""
+	if qp.Limit != "" {
+		limitClause = "LIMIT " + qp.Limit // You've already validated this as a number in the ParseQueryParams function.
+	}
+
+	// Modify the final assembling line:
+	query := fmt.Sprintf("%s %s %s %s %s %s", selectClause, fromClause, strings.Join(joinClauses, " "), whereClause, orderClause, limitClause)
 	return query, valuesMap, nil
 }
 
@@ -1241,4 +1322,7 @@ func logMemoryUsagePeriodically() {
 
 func bToMb(b uint64) uint64 {
 	return b / 1024 / 1024
+}
+func TableNameToAlias(tableName string) string {
+	return strings.Join(strings.Split(tableName, "."), "_")
 }

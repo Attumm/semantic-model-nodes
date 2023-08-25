@@ -85,6 +85,17 @@
             z-index: 10;
             /* To ensure it stays on top */
         }
+        .download_buttons {
+            position: absolute;
+            top: 50px; /* this should be the height of your row_count + some padding */
+            right: 0;
+            z-index: 10; /* To ensure it stays on top */
+            display: flex;
+            flex-direction: column;
+            gap: 10px; /* Space between the buttons */
+            padding: 0 24px;
+        }
+
     </style>
 </head>
 
@@ -96,7 +107,7 @@
             <!-- Search input -->
             <input v-model="searchQuery" placeholder="Search for nodes..." />
             <h3>Available Nodes:</h3>
-            
+
             <div v-for="node in filteredNodes" class="node" @click="setActiveNode(node)">
                 {{ node }}
             </div>
@@ -129,12 +140,17 @@
 
         <!-- Row Count -->
         <div class="row_count">
-            Row Count: {{ current_row_count }}
+            Row Count: {{ currentRowCount }}
+        </div>
+
+        <!-- Download buttons -->
+        <div class="download_buttons">
+            <button @click="downloadAs('json')">Download as JSON</button>
+            <button @click="downloadAs('csv')">Download as CSV</button>
+            <button @click="downloadResults">Download</button>
+            <button @click="fetchPreview">Preview</button>
         </div>
     </div>
-
-
-
 
     <!-- Some basic styles for visibility -->
     <style>
@@ -146,7 +162,6 @@
         }
     </style>
 
-
     <script>
         new Vue({
             el: '#app',
@@ -157,14 +172,14 @@
                 //layoutOrientation: 'vertical',
                 nodesData: {}, // Loaded from API
                 activeNode: null,
-                current_row_count: "",
+                _internalRowCount: 0,
                 type_operators: {},
                 graph: {
                     nodes: [],
                     links: []
                 },
                 fieldOrder: [],
-                result: {},
+                result: [],
             },
             computed: {
                 filteredNodes() {
@@ -172,16 +187,46 @@
                     if (!this.searchQuery) {
                         return Object.keys(this.nodesData);
                     }
-
                     // Convert search query to lowercase for case-insensitive search
                     const query = this.searchQuery.toLowerCase();
-
                     // Filter nodes based on the search query
                     return Object.keys(this.nodesData).filter(node => node.toLowerCase().includes(query));
                 },
-
+                currentRowCount() {
+                    return (this.result && this.result.length != 100 && this.result.length > 0) ? this.result.length : this._internalRowCount;
+                }
+            },
+            watch: {
+                // Watch for changes in graph.nodes array
+                'graph.nodes': {
+                    handler() {
+                        this.fetchPreview();
+                    },
+                    deep: true // Ensure the watcher triggers on deep/nested changes
+                }
             },
             methods: {
+                fetchPreview() {
+                    fetch("api/gen/?" + this.generateQueryString() + "&limit=100")
+                        .then(response => response.json())
+                        .then(data => {
+                            this.result = data;
+                        });
+                },
+
+                downloadAs(format) {
+                    const downloadURL = "api/gen/?" + this.generateQueryString() + "&format=" + format;
+                    window.location.href = downloadURL;
+                },
+
+                downloadResults() {
+                    fetch("api/gen/?" + this.generateQueryString())
+                        .then(response => response.json())
+                        .then(data => {
+                            this.result = data;
+                        });
+                },
+
 
                 generateQueryString() {
                     // Construct the "dn" part of the string using activeNode's name
@@ -200,40 +245,18 @@
                         .sort((a, b) => a.slot - b.slot)
                         .map(filter =>
                             `filter=${encodeURIComponent(filter.operator + ':' + filter.parent + '.' + filter.field_name + ':' + filter.operator_input)}`
-                            );
+                        );
 
-                    // If there are fieldStrings or filterStrings, prepend them with an "&"
-                    if (fieldStrings.length > 0) {
-                        queryString += "&" + fieldStrings.join("&");
-                    }
-
-                    if (filterStrings.length > 0) {
-                        queryString += "&" + filterStrings.join("&");
-                    }
-
-                    return queryString;
-                },
-
-                generateQueryString1() {
-                    // Construct the "dn" part of the string using activeNode's name
-                    let queryString = "dn=" + this.activeNode.name;
-
-                    // Map the field nodes to the desired string format and sort by slot
-                    let fieldStrings = this.graph.nodes
-                        .filter(node => node.type === "field")
-                        .sort((a, b) => a.slot - b.slot)
-                        .map(field => `field=${field.parent}.${field.name}`);
-
-                    // Filter the operator nodes that are of type "filter", sort by slot,
+                    // Filter the operator nodes that are of type "orderby", sort by slot,
                     // and then map to the desired string format
-                    let filterStrings = this.graph.nodes
-                        .filter(node => node.type === "operator" && node.operator_type === "filter")
+                    let orderByStrings = this.graph.nodes
+                        .filter(node => node.type === "operator" && node.operator_type === "orderby")
                         .sort((a, b) => a.slot - b.slot)
-                        .map(filter =>
-                            `filter=${filter.operator}:${filter.parent}.${filter.field_name}:${filter.operator_input}`
-                            );
+                        .map(orderBy =>
+                            `orderby=${orderBy.operator}:${encodeURIComponent(orderBy.parent + '.' + orderBy.field_name)}`
+                        );
 
-                    // If there are fieldStrings or filterStrings, prepend them with an "&"
+                    // If there are fieldStrings, filterStrings, or orderByStrings, prepend them with an "&"
                     if (fieldStrings.length > 0) {
                         queryString += "&" + fieldStrings.join("&");
                     }
@@ -241,8 +264,16 @@
                     if (filterStrings.length > 0) {
                         queryString += "&" + filterStrings.join("&");
                     }
+
+                    if (orderByStrings.length > 0) {
+                        queryString += "&" + orderByStrings.join("&");
+                    }
+
                     return queryString;
                 },
+
+
+
                 toggleLayout() {
                     console.log(this.generateQueryString())
                     this.fetchResults()
@@ -276,24 +307,22 @@
                         });
                 },
                 findNodeAndSetRowCount(node) {
-                    let foundNode = null;
+        let foundNode = null;
 
-                    // Loop over  keys in the nodesData object
-                    for (let key in this.nodesData) {
-                        // Find the node within the current array
-                        foundNode = this.nodesData[key].find(entry => entry.node === node);
+        // Loop over keys in the nodesData object
+        for (let key in this.nodesData) {
+            // Find the node within the current array
+            foundNode = this.nodesData[key].find(entry => entry.node === node);
 
-                        // If the node is found, break out of the loop for efficiency
-                        if (foundNode) {
-                            break;
-                        }
-                    }
-
-                    // If the node was found in the nested arrays, update the current_row_count
-                    if (foundNode) {
-                        this.current_row_count = foundNode.row_count;
-                    }
-                },
+            // If the node is found, break out of the loop for efficiency
+            if (foundNode) {
+                break;
+            }
+        }
+        this.result = [];
+        // Update a separate internal state variable instead of `current_row_count` directly
+        this._internalRowCount = foundNode ? foundNode.row_count : 0;
+    },
 
                 setActiveNode(node) {
                     this.findNodeAndSetRowCount(node);
@@ -328,10 +357,6 @@
                         });
                     });
                     this.drawGraph();
-
-
-
-
                 },
                 drawGraph() {
                     const svg = d3.select("svg");
@@ -347,7 +372,6 @@
                         node.fx = node.slot * slotWidth;
                         node.fy = gridY_level[node.level];
                     })
-
 
                     const simulation = d3.forceSimulation(this.graph.nodes)
                         .force("link", d3.forceLink(this.graph.links).id(d => d.id).distance(80))
@@ -383,7 +407,7 @@
                             .on("drag", dragged.bind(this))
                             .on("end", dragended.bind(this)))
                         .on('click', (event, d) => {
-                            if (d.type === 'field') {
+                            if (d.type === 'field' || d.type === 'operator') {
                                 createContextMenu(event, d);
                             }
                         });
@@ -438,9 +462,39 @@
                         //Y_level[d.level];
                     }
 
+                    function removeOperatorNode(nodeData) {
+                        // Ensure nodeData is of type "operator"
+                        if (nodeData.type !== "operator") {
+                            console.error("Node is not of type 'operator'");
+                            return;
+                        }
+
+                        // Remove the node from graph.nodes
+                        const nodeIndex = this.graph.nodes.indexOf(nodeData);
+                        if (nodeIndex > -1) {
+                            this.graph.nodes.splice(nodeIndex, 1);
+                        }
+
+                        // Remove all links associated with this node
+                        const linksToRemove = this.graph.links.filter(link => {
+                            return link.source === nodeData || link.target === nodeData;
+                        });
+
+                        linksToRemove.forEach(link => {
+                            const linkIndex = this.graph.links.indexOf(link);
+                            if (linkIndex > -1) {
+                                this.graph.links.splice(linkIndex, 1);
+                            }
+                        });
+
+                        // Let the drawing function handle positioning and rendering
+                        this.drawGraph();
+                    }
+
                     function removeNode(nodeData, event) {
                         console.log(event)
                         console.log(this)
+
 
                         // Capture the slot of the node to be removed
                         const removedNodeSlot = nodeData.slot;
@@ -494,8 +548,67 @@
                         // Let the drawing function handle positioning and rendering
                         this.drawGraph();
                     }
+                    function openOrderByDialog(nodeData, event) {
+                        const div = document.createElement('div');
+                        const currentContext = this;
 
-                    function openOperatorDialog(nodeData, event) {
+                        div.style.position = 'absolute';
+                        div.style.left = `${event.pageX}px`;
+                        div.style.top = `${event.pageY}px`;
+                        div.style.zIndex = '1000';
+
+                        const optionsArray = ['asc', 'desc'];
+                        let optionsHTML = optionsArray.map(option =>
+                            `<option value="${option}">${option}</option>`).join('');
+
+                        div.innerHTML = `
+                            <label>Order By:</label>
+                            <select id="orderByOption">${optionsHTML}</select>
+                            
+                            <button onclick="submitHandlerOrderBy()">OK</button>
+                        `;
+
+                        document.body.appendChild(div);
+
+                        const submitHandlerOrderBy = () => {
+                            const selectedOption = document.getElementById('orderByOption').value;
+
+                            const slotIsTaken = currentContext.graph.nodes.some(node => node.slot ===
+                                nodeData.slot && node.type === 'operator');
+                            if (slotIsTaken) {
+                                currentContext.graph.nodes.forEach(node => {
+                                    if (node.slot >= nodeData.slot && node.type === 'operator') {
+                                        node.slot += 1;
+                                    }
+                                });
+                            }
+
+                            const orderByNode = {
+                                type: 'operator',
+                                name: `Order by: ${selectedOption}`,
+                                slot: nodeData.slot,
+                                level: 2,
+                                parent: nodeData.parent,
+                                field_name: nodeData.name,
+                                operator_type: "orderby",
+                                operator: selectedOption,
+                                operator_input: null  // No operator_input for orderby
+                            };
+
+                            currentContext.graph.nodes.push(orderByNode);
+                            currentContext.graph.links.push({
+                                source: nodeData,
+                                target: orderByNode
+                            });
+
+                            currentContext.drawGraph();
+                            document.body.removeChild(div);
+                        };
+
+                        window.submitHandlerOrderBy = submitHandlerOrderBy;
+                    }
+
+                    function openFilterDialog(nodeData, event) {
                         const div = document.createElement('div');
                         const currentContext = this;
 
@@ -510,11 +623,11 @@
                             `<option value="${option}">${option}</option>`).join('');
 
                         div.innerHTML = `
-        <label>Operator Type:</label>
-        <select id="operatorOption">${optionsHTML}</select>
+        <label>Filter Type:</label>
+        <select id="filterOption">${optionsHTML}</select>
         
-        <label>Enter Operator Details:</label>
-        <input type="text" id="operatorInput" />
+        <label>Enter Filter Details:</label>
+        <input type="text" id="filterInput" />
         
         <button onclick="submitHandler()">OK</button>
     `;
@@ -522,8 +635,8 @@
                         document.body.appendChild(div);
 
                         const submitHandler = () => {
-                            const selectedOption = document.getElementById('operatorOption').value;
-                            const inputValue = document.getElementById('operatorInput').value;
+                            const selectedOption = document.getElementById('filterOption').value;
+                            const inputValue = document.getElementById('filterInput').value;
 
                             const slotIsTaken = currentContext.graph.nodes.some(node => node.slot ===
                                 nodeData.slot && node.type === 'operator');
@@ -585,23 +698,36 @@
                         }
                     }
 
-                    function handleContextMenuClick(option, nodeData, event) {
-                        console.log(this)
-                        switch (option) {
-                            case 'Remove':
-                                console.log("remove")
-                                removeNode(nodeData, event);
-                                break;
-                            case 'Operator':
-                                console.log("operator")
-                                openOperatorDialog(nodeData, event);
-                                break;
-                            case 'Link':
-                                console.log("link")
-                                openLinkDialog(nodeData, event);
-                                break;
+                    function handleContextMenuClick(selectedOption, d, event) {
+                        console.log("hanlde context")
+                        if (d.type === "field") {
+                            switch (selectedOption) {
+                                case 'Remove':
+                                    removeNode(d, event);
+                                    break;
+                                case 'Filter':
+                                    openFilterDialog(d, event);
+                                    break;
+                                case 'Orderby':
+                                    openOrderByDialog(d, event);
+                                    break;
+                                case 'Link':
+                                    openLinkDialog(d, event); // Assuming you have a function for this.
+                                    break;
+                                default:
+                                    break;
+                            }
+                        } else if (d.type === "operator") {
+                            switch (selectedOption) {
+                                case 'Remove':
+                                    removeOperatorNode(d, event);
+                                    break;
+                                default:
+                                    break;
+                            }
                         }
                     }
+
 
                     function createContextMenu(event, d) {
                         // Remove any existing context menu
@@ -612,7 +738,7 @@
                             .append('div')
                             .attr('class', 'context-menu')
                             .style('left',
-                            `${event.pageX + 10}px`) // slight offset to not directly open under mouse
+                                `${event.pageX + 10}px`) // slight offset to not directly open under mouse
                             .style('top', `${event.pageY + 10}px`)
                             .style('zIndex', '1000')
                             .style('border', '1px solid #ccc') // Border around the context menu
@@ -621,8 +747,12 @@
                             .style('font-family', 'Arial, sans-serif') // Font 
                             .style('box-shadow', '3px 3px 10px rgba(0, 0, 0, 0.2)'); // Drop shadow
 
-                        const options = ['Remove', 'Operator', 'Link'];
+                        const contextMenuOptionsMap = {
+                            "field": ['Remove', 'Filter', 'Link', 'Orderby'],
+                            "operator": ['Remove'],
+                        }
 
+                        const options = contextMenuOptionsMap[d.type] || [];
                         // Append our three options to the menu
                         menu.selectAll('p')
                             .data(options)
@@ -634,11 +764,11 @@
                             .style('cursor', 'pointer') // Hand cursor on hover
                             .on('mouseover', function () {
                                 d3.select(this).style('background-color',
-                                '#e5e5e5'); // Change background color on hover
+                                    '#e5e5e5'); // Change background color on hover
                             })
                             .on('mouseout', function () {
                                 d3.select(this).style('background-color',
-                                '#f5f5f5'); // Reset background color
+                                    '#f5f5f5'); // Reset background color
                             })
                             .on('click', function (event) {
                                 const selectedOption = d3.select(this).text();
@@ -647,10 +777,11 @@
                             });
                     }
 
-
+                    removeOperatorNode = removeOperatorNode.bind(this)
                     removeNode = removeNode.bind(this);
                     openLinkDialog = openLinkDialog.bind(this)
-                    openOperatorDialog = openOperatorDialog.bind(this)
+                    openFilterDialog = openFilterDialog.bind(this)
+                    openOrderByDialog = openOrderByDialog.bind(this)
                     handleContextMenuClick = handleContextMenuClick.bind(this);
                     createContextMenu = createContextMenu.bind(this);
 
