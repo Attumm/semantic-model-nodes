@@ -3,6 +3,8 @@ import re
 import csv
 import json
 
+import gzip
+
 from collections import defaultdict
 
 uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -59,7 +61,7 @@ def generate_insert_template(table_name, columns):
     return  f"INSERT INTO \"{table_name}\" ({', '.join(quoted_columns)}) VALUES ({placeholders});"
 
 
-def datas():
+def old_way_of_getting_data():
     single = False
     if single:
         data = json.load(open("/Volumes/shield/data/standalone/node/f658d592-7845-5054-899d-b98249322b30"))
@@ -73,41 +75,61 @@ def datas():
             data = get_data(data_dir, uuid_file)
             yield data
 
+
+def read_gzip(file_path):
+    with gzip.open(file_path, 'rt') as gz_file:
+        for line in gz_file:
+            yield json.loads(line.strip())
+
+
+def datas():
+    single = False 
+    if single:
+        file_path = "/Volumes/shield/data/standalone/node/large_file.gzip"
+        with gzip.open(file_path, 'rt') as gz_file:
+            for line in gz_file:
+                yield json.loads(line.strip())
+                break
+    else:
+        file_path = "/Volumes/shield/data/standalone/node/large_file.gzip"
+        yield from read_gzip(file_path)
+
 # Consolidate table structures
-tables = {}
+def create_initial_data():
+    tables = {}
+    for data in datas():
+        for table_data in data:
+            table_name = ".".join(table_data["_dn"])
 
-tables = {}
-for data in datas():
-    for table_data in data:
-        table_name = ".".join(table_data["_dn"])
+            columns = table_data["__columns"]
+            if table_name not in tables:
+                if table_name != "standard":
+                    tables[table_name] = {"standard_id": "UUID"}
+                else:
+                    tables[table_name] = {}
 
-        columns = table_data["__columns"]
-        if table_name not in tables:
-            if table_name != "standard":
-                tables[table_name] = {"standard_id": "UUID"}
-            else:
-                tables[table_name] = {}
+            for column in columns:
+                postgres_type = get_postgres_type(table_data.get(f"_{column}_type", "string"), table_data.get(f"_{column}_field_type"))
+                tables[table_name][column] = postgres_type
 
-        for column in columns:
-            postgres_type = get_postgres_type(table_data.get(f"_{column}_type", "string"), table_data.get(f"_{column}_field_type"))
-            tables[table_name][column] = postgres_type
+            # Add the common read_groups column for each table
+            tables[table_name]["read_groups"] = "text[]"
+    return tables
 
-        # Add the common read_groups column for each table
-        tables[table_name]["read_groups"] = "text[]"
 
-# Generate CREATE TABLE statements
-with open('init.sql', 'w') as f:
-    for table_name, columns_data in tables.items():
-        f.write(generate_create_table_sql(table_name, columns_data))
-        f.write("\n\n---\n\n")
+def create_schema(tables):
+    # Generate CREATE TABLE statements
+    with open('init.sql1', 'w') as f:
+        for table_name, columns_data in tables.items():
+            f.write(generate_create_table_sql(table_name, columns_data))
+            f.write("\n\n---\n\n")
 
-print("done with init.sql")
 
 # Generate INSERT templates
-insert_templates = {}
-for table_name in tables.keys():
-    columns = list(tables[table_name].keys())
-    insert_templates[table_name] = generate_insert_template(table_name, columns)
+#insert_templates = {}
+#for table_name in tables.keys():
+#    columns = list(tables[table_name].keys())
+#    insert_templates[table_name] = generate_insert_template(table_name, columns)
 
 
 def parse_value_insert(item, dsm_type, field_type):
@@ -232,14 +254,28 @@ class CSVWriter():
             file_handler.close()
 
 
-unique_columns = {table_name: list(columns.keys()) for table_name, columns in tables.items()}
-with CSVWriter(unique_columns) as csv_writer:
-    for data in datas():
-        for record in data:
-            table_name = ".".join(record["_dn"])
-            #print(record)
-            #print("----")
-            formatted_data = create_formatted_data(record)
-            csv_writer.write(table_name, formatted_data)
+def create_data(tables):
+    unique_columns = {table_name: list(columns.keys()) for table_name, columns in tables.items()}
+    with CSVWriter(unique_columns) as csv_writer:
+        for data in datas():
+            for record in data:
+                table_name = ".".join(record["_dn"])
+                #print(record)
+                #print("----")
+                formatted_data = create_formatted_data(record)
+                csv_writer.write(table_name, formatted_data)
 
 
+
+
+
+if __name__ == "__main__":
+    run_create_schema = True
+    run_create_data = True
+    initial_data = create_initial_data()
+    if run_create_schema:
+        create_schema(initial_data)
+        print("done with init.sql")
+    if run_create_data:
+        create_data(initial_data)
+        print("done with creating data files")

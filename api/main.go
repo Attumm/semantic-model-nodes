@@ -551,6 +551,8 @@ func encodeResponse(w http.ResponseWriter, rows *sql.Rows, requestData *RequestD
 	switch requestData.Format {
 	case "json":
 		streamJSON(w, rows, requestData)
+	case "json_":
+		streamJSON_no_order(w, rows, requestData)
 	case "jsonmem2":
 		streamJSON_MEM2(w, rows, requestData)
 	case "jsonpq":
@@ -1308,7 +1310,7 @@ func main() {
 	http.ListenAndServe(SERVER_HOST, nil)
 }
 func logMemoryUsagePeriodically() {
-	ticker := time.NewTicker(200 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
 		var m runtime.MemStats

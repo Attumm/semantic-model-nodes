@@ -1,5 +1,16 @@
 #!/bin/bash
+
+rm files/*.csv
+
 time pypy3 main.py
+# real	17m31.265s
+# user	14m59.622s
+# sys	2m29.796s
+
+#time python3 main.py
+# real	26m36.420s
+# user	23m28.345s
+# sys	3m4.873s
 
 # Combine SQL files
 echo "-- Combining SQL and CSV commands"
