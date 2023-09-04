@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
@@ -10,11 +11,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strings"
-	//"encoding/base64"
-	"bytes"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 	"unicode"
 
@@ -33,24 +32,42 @@ var Queries = map[string]string{
                         SELECT column_name, data_type
                         FROM information_schema.columns
                         WHERE table_name = $1 AND table_schema = 'public'
-                    )
+                     )
 
-                    SELECT
+                     SELECT
                         $1 AS main_table,
                         mtc.column_name AS main_column,
                         ic.table_name AS other_table,
                         ic.column_name AS other_column,
                         ic.data_type
-                    FROM main_table_columns mtc
-                    JOIN information_schema.columns ic ON mtc.data_type = ic.data_type
-                    WHERE ic.table_name != $1 AND ic.table_schema = 'public'
-                    ORDER BY
+                     FROM main_table_columns mtc
+                     JOIN information_schema.columns ic ON mtc.data_type = ic.data_type
+                     WHERE ic.table_name != $1 AND ic.table_schema = 'public'
+                     ORDER BY
                         CASE WHEN ic.data_type = 'text' THEN 1 ELSE 0 END,
                         mtc.column_name,
-                        ic.table_name;
-                    `,
-	"list-nodes": `
-                    SELECT
+                        ic.table_name;`,
+
+	"link-possible": `
+            WITH specified_column AS (
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_name = $1 AND column_name = $2 AND table_schema = 'public'
+            )
+            SELECT
+                ic.table_name as node,
+                ic.column_name as field
+            FROM
+                information_schema.columns ic, specified_column sc
+            WHERE
+                ic.data_type = sc.data_type AND
+                (ic.table_name != $1 OR ic.column_name != $2) AND
+                ic.table_schema = 'public'
+            ORDER BY
+                ic.table_name, ic.column_name;
+
+    `,
+	"list-nodes": `SELECT
                         t.table_name AS node,
                         c.column_name AS field,
                         c.data_type AS field_type,
@@ -64,9 +81,7 @@ var Queries = map[string]string{
                     WHERE
                         t.table_schema = 'public'
                     ORDER BY
-                        t.table_name, c.ordinal_position;
-
-                    `,
+                        t.table_name, c.ordinal_position;`,
 }
 
 type RequestData struct {
@@ -712,6 +727,7 @@ func QueryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query, params, err := cleanInput(reqData)
+	fmt.Println(query)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -1107,9 +1123,8 @@ func ParseQueryParams(params url.Values) (*QueryParams, error) {
 	}
 	// Parse orderBy
 	for _, ob := range params["orderby"] {
-        
+
 		parts := strings.SplitN(ob, ":", 2)
-        fmt.Println("parts", parts)
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("malformed orderby parameter: %s", ob)
 		}
@@ -1119,15 +1134,15 @@ func ParseQueryParams(params url.Values) (*QueryParams, error) {
 			return nil, fmt.Errorf("invalid orderby direction: %s. Only ASC or DESC is allowed", parts[0])
 		}
 
-    // Splitting the field by the last "."
-        lastDotIndex := strings.LastIndex(parts[1], ".")
-        fieldParts := []string{}
-        if lastDotIndex != -1 {
-            fieldParts = []string{parts[1][:lastDotIndex], parts[1][lastDotIndex+1:]}
-            fmt.Println(fieldParts)
-        } else {
-            fmt.Println("Dot not found!")
-        }
+		// Splitting the field by the last "."
+		lastDotIndex := strings.LastIndex(parts[1], ".")
+		fieldParts := []string{}
+		if lastDotIndex != -1 {
+			fieldParts = []string{parts[1][:lastDotIndex], parts[1][lastDotIndex+1:]}
+			fmt.Println(fieldParts)
+		} else {
+			fmt.Println("Dot not found!")
+		}
 		if len(fieldParts) != 2 {
 			return nil, fmt.Errorf("malformed orderby field: %s", parts[1])
 		}
@@ -1325,6 +1340,7 @@ func logMemoryUsagePeriodically() {
 func bToMb(b uint64) uint64 {
 	return b / 1024 / 1024
 }
+
 func TableNameToAlias(tableName string) string {
 	return strings.Join(strings.Split(tableName, "."), "_")
 }
