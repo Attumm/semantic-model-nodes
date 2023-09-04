@@ -232,6 +232,15 @@
                                 `filter=${encodeURIComponent(filter.operator + ':' + filter.parent + '.' + filter.field_name + ':' + filter.operator_input)}`
                             );
 
+                        //TOHERE
+                        let linkStrings = this.graph.nodes
+                            .filter(node => node.type === "operator" && node.operator_type === "link")
+                            .sort((a, b) => a.slot - b.slot)
+                            .map(link =>
+                                `link=${encodeURIComponent(link.parent + '.' + link.field_name + ':' + link.operator + '.' + link.operator_input)}`
+                            );
+
+
                         // Filter the operator nodes that are of type "orderby", sort by slot,
                         // and then map to the desired string format
                         let orderByStrings = this.graph.nodes
@@ -252,6 +261,9 @@
 
                         if (orderByStrings.length > 0) {
                             queryString += "&" + orderByStrings.join("&");
+                        }
+                        if (linkStrings.length > 0) {
+                            queryString += "&" + linkStrings.join("&");
                         }
                         return queryString;
                     },
@@ -307,6 +319,7 @@
 
                         this.activeNode = {
                             type: 'node',
+                            main: true,
                             name: node,
                             slot: 1,
                             level: 0
@@ -635,26 +648,124 @@
                         }
 
 
-                        function openLinkDialog(nodeData) {
+                        async function openLinkDialog(nodeData) {
+                            // Create a dialog
                             const div = document.createElement('div');
+                            div.style.position = 'absolute';
+                            div.style.left = `${event.pageX}px`; // Position horizontally where the mouse click happened
+                            div.style.top = `${event.pageY}px`;  // Position vertically where the mouse click happened
+                            div.style.zIndex = '1000';
+                            const currentContext = this;
+
+                            // Make the API call to get the possible fields for linking
+                            const response = await fetch(`http://127.0.0.1:8080/api/link-possible/${nodeData.parent}/${nodeData.name}?groupby=node`);
+                            const data = await response.json();
+
+                            // Create HTML for dropdowns
+                            let dropdownOptions1 = Object.keys(data).map(node =>
+                                `<option value="${node}">${node}</option>`).join('');
+
+                            // Populate the first dropdown and also populate the second dropdown based on the first entry by default.
+                            let firstNode = Object.keys(data)[0];
+                            let dropdownOptions2 = data[firstNode].map(field =>
+                                    `<option value="${field.field}">${field.field}</option>`).join('');
+
                             div.innerHTML = `
-                                <label>Enter Link Details:</label>
-                                <input type="text" id="linkInput" />
+                                <label>Select Node:</label>
+                                <select id="linkNode" onchange="populateSecondDropdown()">${dropdownOptions1}</select>
+
+                                <label>Select Field:</label>
+                                <select id="linkField">${dropdownOptions2}</select>
+
                                 <button onclick="handleLinkSubmit()">OK</button>
                             `;
 
+                            // Append to body
                             document.body.appendChild(div);
 
-                            window.handleLinkSubmit = function () {
-                                const inputValue = document.getElementById('linkInput').value;
-                                if (inputValue) {
-                                    // Make the API call or any other logic you need with the inputValue
-                                    // Example: createLink(nodeData, inputValue);
+                            window.populateSecondDropdown = function() {
+                                const selectedNode = document.getElementById('linkNode').value;
+                                const fields = data[selectedNode];
+                                dropdownOptions2 = fields.map(field => 
+                                    `<option value="${field.field}">${field.field}</option>`).join('');
+                                document.getElementById('linkField').innerHTML = dropdownOptions2;
+                            }
+
+                            window.handleLinkSubmit = function() {
+                                const selectedNode = document.getElementById('linkNode').value;
+                                const selectedField = document.getElementById('linkField').value;
+
+                                let highestNodeSlot = Math.max(...currentContext.graph.nodes.filter(item => item.type === 'node').map(n => n.slot), 0);
+                                let highestFieldSlot = Math.max(...currentContext.graph.nodes.filter(item => item.type === 'field').map(n => n.slot), 0);
+
+                                if (selectedNode && selectedField) {
+                                    const operatorNode = {
+                                        type: 'operator',
+                                        name: `${selectedNode}: ${selectedField}`,
+                                        slot: highestFieldSlot,
+                                        level: 2,
+                                        parent: nodeData.parent,
+                                        field_name: nodeData.name,
+                                        operator_type: "link",
+                                        operator: selectedNode,
+                                        operator_input: selectedField
+                                    };
+                                    currentContext.graph.nodes.push(operatorNode);
+                                    currentContext.graph.links.push({
+                                        source: nodeData,
+                                        target: operatorNode
+                                    });
+
+
+                                    // Add the selected node to this.graph.nodes
+                                    const newNode = {
+                                        type: 'node',
+                                        name: selectedNode,
+                                        main: false,
+                                        slot: highestFieldSlot + 1,
+                                        level: 0
+                                    };
+                                    currentContext.graph.nodes.push(newNode);
+                                    currentContext.nodesData[selectedNode].forEach((field, index) => {
+                                        const fieldNode = {
+                                            type: 'field',
+                                            name: field.field,
+                                            slot: highestFieldSlot + 1 + index,
+                                            level: 1,
+                                            parent: field.node,
+                                            field_type: field.field_type
+                                        };
+                                        currentContext.graph.nodes.push(fieldNode);
+                                        currentContext.graph.links.push({
+                                            source: newNode,
+                                            target: fieldNode
+                                        });
+
+                                                // Find the selected field node object from currentContext.graph.nodes
+                                        const selectedFieldNode = currentContext.graph.nodes.find(
+                                            node => node.type === 'field' && node.name === selectedField && node.parent === selectedNode
+                                        );
+
+                                        if (selectedFieldNode) {
+                                            // Create a new link from the operator to the selected field
+                                            const newLink = {
+                                                source: operatorNode,
+                                                target: selectedFieldNode
+                                            };
+
+                                            // Add this link to currentContext.graph.links
+                                            currentContext.graph.links.push(newLink);
+                                        }
+                                    });
+
+                                    currentContext.drawGraph(); // Assuming you have a method like this to update your graph
                                 }
+
                                 // Remove the dialog after submission
                                 document.body.removeChild(div);
                             }
                         }
+
 
                         function handleContextMenuClick(selectedOption, d, event) {
                             console.log("hanlde context")

@@ -1041,9 +1041,11 @@ func transOperator(operator string) string {
 }
 
 type JoinPart struct {
-	JoinType string
-	Left     string
-	Right    string
+	JoinType    string
+	LeftTable   string
+	LeftColumn  string
+	RightTable  string
+	RightColumn string
 }
 
 type FilterPart struct {
@@ -1067,6 +1069,16 @@ type QueryParams struct {
 	Limit     string
 }
 
+func splitTableAndColumn(full string) (string, string, error) {
+	parts := strings.Split(full, ".")
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("invalid table.column format: %s", full)
+	}
+	column := parts[len(parts)-1]
+	table := strings.Join(parts[:len(parts)-1], ".")
+	return table, column, nil
+}
+
 func ParseQueryParams(params url.Values) (*QueryParams, error) {
 	qp := &QueryParams{}
 	// Parse main table (dn)
@@ -1074,36 +1086,64 @@ func ParseQueryParams(params url.Values) (*QueryParams, error) {
 	// Parse select fields
 	qp.Selects = params["field"]
 
-	// Parse joins (links)
 	for _, link := range params["link"] {
-		parts := strings.Split(link, ":")
+		decodedLink, err := url.QueryUnescape(link)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode link parameter: %v", err)
+		}
+
+		parts := strings.Split(decodedLink, ":")
 		var join JoinPart
 
 		switch len(parts) {
 		case 1:
 			join = JoinPart{
-				JoinType: "INNER",
-				Left:     qp.MainTable + ".id",
-				Right:    parts[0],
+				JoinType:    "INNER",
+				LeftTable:   qp.MainTable,
+				LeftColumn:  "id",
+				RightTable:  strings.Split(parts[0], ".")[0],
+				RightColumn: strings.Split(parts[0], ".")[1],
 			}
 		case 2:
+			leftTable, leftColumn, err := splitTableAndColumn(parts[0])
+			if err != nil {
+				return nil, err
+			}
+			rightTable, rightColumn, err := splitTableAndColumn(parts[1])
+			if err != nil {
+				return nil, err
+			}
 			join = JoinPart{
-				JoinType: "INNER",
-				Left:     parts[0],
-				Right:    parts[1],
+				JoinType:    "INNER",
+				LeftTable:   leftTable,
+				LeftColumn:  leftColumn,
+				RightTable:  rightTable,
+				RightColumn: rightColumn,
 			}
 		case 3:
+			joinType := strings.ToUpper(parts[0])
+			leftTable, leftColumn, err := splitTableAndColumn(parts[1])
+			if err != nil {
+				return nil, err
+			}
+			rightTable, rightColumn, err := splitTableAndColumn(parts[2])
+			if err != nil {
+				return nil, err
+			}
 			join = JoinPart{
-				JoinType: strings.ToUpper(parts[0]),
-				Left:     parts[1],
-				Right:    parts[2],
+				JoinType:    joinType,
+				LeftTable:   leftTable,
+				LeftColumn:  leftColumn,
+				RightTable:  rightTable,
+				RightColumn: rightColumn,
 			}
 		default:
-			return nil, fmt.Errorf("malformed link parameter: %s", link)
+			return nil, fmt.Errorf("malformed link parameter: %s", decodedLink)
 		}
 
 		qp.Joins = append(qp.Joins, join)
 	}
+
 	// Parse Filters
 	for counter, filter := range params["filter"] {
 		parts := strings.SplitN(filter, ":", 3)
@@ -1195,6 +1235,10 @@ func ColumnNameToSQL(columnName string) string {
 	return tableName + "." + parts[len(parts)-1]
 }
 
+func toAlias(tableName string) string {
+	return strings.ReplaceAll(tableName, ".", "_")
+}
+
 func ConstructQuery(params url.Values) (string, map[string]string, error) {
 	qp, err := ParseQueryParams(params)
 	if err != nil {
@@ -1214,12 +1258,23 @@ func ConstructQuery(params url.Values) (string, map[string]string, error) {
 	}
 
 	// Building FROM clause
-	fromClause := fmt.Sprintf("FROM %s", qp.MainTable)
+	fromClauses := []string{}
+	fromClauses = append(fromClauses, fmt.Sprintf("%s", qp.MainTable))
 
-	// Building JOIN clause
+	// Build JOIN clause
+	// INNER JOIN domain AS domain_alias ON domain_hostfile.ip_address = domain_alias.arp
 	joinClauses := []string{}
 	for _, join := range qp.Joins {
-		joinSQL := fmt.Sprintf("%s JOIN %s ON %s = %s", join.JoinType, TableNameToSQL(strings.Split(join.Right, ".")[0]), ColumnNameToSQL(join.Left), ColumnNameToSQL(join.Right))
+		leftAlias := toAlias(join.LeftTable)   // Assuming this gives you just the alias
+		rightAlias := toAlias(join.RightTable) // Assuming this gives you just the alias
+
+		joinSQL := fmt.Sprintf("%s JOIN \"%s\" AS %s ON %s.%s = %s.%s",
+			join.JoinType,
+			join.RightTable,
+			rightAlias,
+			leftAlias, join.LeftColumn,
+			rightAlias, join.RightColumn)
+
 		joinClauses = append(joinClauses, joinSQL)
 	}
 
@@ -1254,7 +1309,10 @@ func ConstructQuery(params url.Values) (string, map[string]string, error) {
 	}
 
 	// Modify the final assembling line:
-	query := fmt.Sprintf("%s %s %s %s %s %s", selectClause, fromClause, strings.Join(joinClauses, " "), whereClause, orderClause, limitClause)
+	fromClause := "FROM " + strings.Join(fromClauses, ", ")
+	joinClause := strings.Join(joinClauses, " ")
+	query := fmt.Sprintf("%s %s %s %s %s %s", selectClause, fromClause, joinClause, whereClause, orderClause, limitClause)
+
 	return query, valuesMap, nil
 }
 
