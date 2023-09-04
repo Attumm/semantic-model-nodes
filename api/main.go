@@ -973,7 +973,7 @@ type SMQueryOptions struct {
 }
 
 var AllowedOperators = map[string][]string{
-	"text":     {"match", "notmatch", "imatch", "startswith", "istartswith", "endswith", "iendswith", "contains", "icontains"},
+	"text":     {"match", "notmatch", "imatch", "startswith", "istartswith", "endswith", "iendswith", "contains", "icontains", "regex", "iregex"},
 	"cidr":     {"match", "neq", "contained_by_or_eq", "contains_or_eq", "contained_by", "ip_contains"}, // "is_supernet_or_eq", "is_subnet_or_eq", "is_supernet", "is_subnet"},
 	"inet":     {"match", "neq", "contained_by_or_eq", "contains_or_eq", "contained_by", "ip_contains"}, // "is_supernet_or_eq", "is_subnet_or_eq", "is_supernet", "is_subnet"},
 	"int":      {"match", "gt", "lt", "lte", "gte", "in", "notin", "neq"},
@@ -1326,6 +1326,8 @@ var SQLOperators = map[string]string{
 	"iendswith":            "ILIKE '%%' || %s",
 	"contains":             "LIKE '%%' || %s || '%%'",
 	"icontains":            "ILIKE '%%' || %s || '%%'",
+	"regex":                "~ %s",
+	"iregex":               "~* %s",
 	"gt":                   "> %s",
 	"lt":                   "< %s",
 	"lte":                  "<= %s",
