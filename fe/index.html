@@ -103,7 +103,8 @@
                 <h3>Available Nodes:</h3>
 
                 <div v-for="node in filteredNodes" class="node" @click="setActiveNode(node)">
-                    {{ node }}
+                    <!-- {{ node }} below is certain context only TODO-->
+                    {{ node.startsWith('domain.') ? node.replace('domain.', '') : node }}
                 </div>
             </div>
 
@@ -117,7 +118,9 @@
 
             <!-- Center Center Panel -->
             <div class="center_center" style="width: 100%; overflow-x: auto; margin-top: 2em;">
-                <h3 v-if="result && result.length">First {{result.length}} Results:</h3>
+                <h3 v-if="result && result.length">
+                    {{ result.length >= 100 ? 'First ' : '' }}{{ result.length }} Results:
+                </h3>
                 <table v-if="result && result.length" border="1" cellspacing="0" cellpadding="5">
                     <thead>
                         <tr>
