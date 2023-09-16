@@ -20,6 +20,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
+
 var DB *sql.DB
 
 var Queries = map[string]string{
@@ -80,6 +81,7 @@ var Queries = map[string]string{
                         pg_stat_user_tables sut ON t.table_name = sut.relname
                     WHERE
                         t.table_schema = 'public'
+                         AND c.column_name NOT LIKE '__meta__%'
                     ORDER BY
                         t.table_name, c.ordinal_position;`,
 }

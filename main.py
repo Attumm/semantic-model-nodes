@@ -1,13 +1,24 @@
 import os
+import sys
 import re
 import csv
 import json
+import time
+import logging
 
 import gzip
 
 from collections import defaultdict
 
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+
+META_RBAC_KEY = "__meta__rbac_read_groups"
 uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+
 
 def is_uuid(item):
     return re.match(uuid_pattern, item)
@@ -27,16 +38,6 @@ def get_dsm_psql_types(path_to_csv='dsm_psql_types.csv'):
     return dsm_to_psql, psql_to_dsm
 
 
-DSM_TO_PSQL_MAPPING, _ = get_dsm_psql_types()
-
-def get_postgres_type(dsm_type, field_type):
-    """Map custom type names to PostgreSQL data types"""
-    base_type = DSM_TO_PSQL_MAPPING.get(dsm_type, "TEXT")
-    higher_type = DSM_TO_PSQL_MAPPING.get(field_type)
-    
-    return higher_type or base_type
-
-
 def generate_create_table_sql(table_name, columns_data):
     sql_parts = [f"CREATE TABLE \"{table_name}\" ("]
 
@@ -47,7 +48,7 @@ def generate_create_table_sql(table_name, columns_data):
             sql_parts.append(f"    \"{column}\" {column_type},")
 
     if table_name != "standard":
-        sql_parts.append(f"    FOREIGN KEY (standard_id) REFERENCES standard(id),")
+        sql_parts.append("    FOREIGN KEY (standard_id) REFERENCES standard(id),")
 
     sql_parts[-1] = sql_parts[-1].rstrip(",")  # remove trailing comma from the last column
 
@@ -58,7 +59,7 @@ def generate_create_table_sql(table_name, columns_data):
 def generate_insert_template(table_name, columns):
     quoted_columns = [f'"{column}"' for column in columns]
     placeholders = ", ".join(["{%s}" % column for column in columns])
-    return  f"INSERT INTO \"{table_name}\" ({', '.join(quoted_columns)}) VALUES ({placeholders});"
+    return f"INSERT INTO \"{table_name}\" ({', '.join(quoted_columns)}) VALUES ({placeholders});"
 
 
 def old_way_of_getting_data():
@@ -82,22 +83,21 @@ def read_gzip(file_path):
             yield json.loads(line.strip())
 
 
-def datas():
-    single = False 
+def datas(data_base_dir):
+    single = False
+    file_path = f"{data_base_dir}standalone/node/large_file.gzip"
     if single:
-        file_path = "/Volumes/shield/data/standalone/node/large_file.gzip"
         with gzip.open(file_path, 'rt') as gz_file:
             for line in gz_file:
                 yield json.loads(line.strip())
                 break
     else:
-        file_path = "/Volumes/shield/data/standalone/node/large_file.gzip"
         yield from read_gzip(file_path)
 
-# Consolidate table structures
-def create_initial_data():
+
+def create_initial_data(data_base_dir):
     tables = {}
-    for data in datas():
+    for data in datas(data_base_dir):
         for table_data in data:
             table_name = ".".join(table_data["_dn"])
 
@@ -112,72 +112,32 @@ def create_initial_data():
                 postgres_type = get_postgres_type(table_data.get(f"_{column}_type", "string"), table_data.get(f"_{column}_field_type"))
                 tables[table_name][column] = postgres_type
 
-            # Add the common read_groups column for each table
-            tables[table_name]["read_groups"] = "text[]"
+            tables[table_name][META_RBAC_KEY] = "text[]"
     return tables
 
 
 def create_schema(tables):
     # Generate CREATE TABLE statements
-    with open('init.sql1', 'w') as f:
+    with open('init.sql', 'w') as f:
         for table_name, columns_data in tables.items():
             f.write(generate_create_table_sql(table_name, columns_data))
             f.write("\n\n---\n\n")
 
 
-# Generate INSERT templates
-#insert_templates = {}
-#for table_name in tables.keys():
-#    columns = list(tables[table_name].keys())
-#    insert_templates[table_name] = generate_insert_template(table_name, columns)
-
-
-def parse_value_insert(item, dsm_type, field_type):
-    postgres_type = get_postgres_type(dsm_type, field_type)
-    if item == 'None':
-        return 'NULL'
-    elif postgres_type == "CIDR" and not item:
-        return "NULL"
-    elif type(item) == str:
-        return f"'{item.strip()}'"
-    elif type(item) == list:  # Check if it's an array type and item is a list
-        # Convert the list to a PostgreSQL array literal
-        if len(item) == 0:
-            return 'NULL'
-        return "{" + ",".join([f"'{x}'" for x in item]) + "}"
-    elif item is None:
-        return 'NULL'
-    
-    return item
-
-
 def parse_value_csv(item, dsm_type, field_type):
-    postgres_type = get_postgres_type(dsm_type, field_type)
-    #if item == 'None':
-    #    return 'NULL'
-    #elif postgres_type == "CIDR" and not item:
-    #    return "NULL"
-    #elif item is None:
-    #    return NULL 
-
-
-    #if isinstance(item, str) and item.startswith("[") and item.endswith("]"):
-        # Convert Python list representation to PostgreSQL array representation
-   #     item = "{" + item[1:-1] + "}"
-   #     item = item.replace("'", "\"")  # Use double quotes for strings within array
-
-    # TODO tired
-    #if isinstance(item, str) and len(item) > 0 and item[0] == "'" and item[-1] == "'":
-    #    return item[1:-1]
+    #  If custom some extra processing is needed based on dsm type.
+    #  based on dsm that could be done here.
+    # postgres_type = get_postgres_type(dsm_type, field_type)
     if isinstance(item, list):
         # Convert the list to PostgreSQL array format
-        return '{' + ', '.join([f'"{x}"' for x in item]) + '}'
+        return '{' + ', '.join([f'{x}' for x in item]) + '}'
     return item
 
 
 def get_row_level_read_access(record):
     columns = record.get("__columns")
     if columns is None:
+        raise Exception("No column record", json.dumps(record, indent=4))
         return []
     if not isinstance(columns, list) or len(columns) <= 0:
         return []
@@ -195,41 +155,24 @@ def create_formatted_data(record):
     formatted_data = defaultdict(default_value)
     if record["_dn"] != ["standard"]:
         formatted_data['standard_id'] = f"{record['common_id']}"
-    formatted_data['read_groups'] = parse_value_csv(get_row_level_read_access(record), None, None)
+    formatted_data[META_RBAC_KEY] = parse_value_csv(get_row_level_read_access(record), None, None)
     for column in record['__columns']:
-        #value = parse_value_insert(record[column], record.get(f"_{column}_type", "string"), record.get(f"_{column}_field_type")) 
-        value = parse_value_csv(record[column], record.get(f"_{column}_type", "string"), record.get(f"_{column}_field_type")) 
+        value = parse_value_csv(record[column], record.get(f"_{column}_type", "string"), record.get(f"_{column}_field_type"))
         formatted_data[column] = value
 
     return formatted_data
 
 
-class SafeDict(dict):
-    def __missing__(self, key):
-        return 'NULL'
-
 def default_value():
     return 'NULL'
 
-"""
-with open('inserts.sql', 'w') as f:
-    for data in datas():
-        for record in data:
-            table_name = ".".join(record["_dn"])#.replace(" ", "_")
-            #formatted_data = {col: record.get(col, 'NULL') for col in record['__columns']}
-            formatted_data = create_formatted_data(record)
-            insert_statement = insert_templates[table_name].format_map(formatted_data)
-
-            f.write(insert_statement)
-            f.write("\n")
-
-"""
 
 class CSVWriter():
-    def __init__(self, unique_columns_per_table):
+    def __init__(self, unique_columns_per_table, base_dir_data="files"):
         self.unique_columns_per_table = unique_columns_per_table
         self.file_handlers = {}
         self.csv_writers = {}
+        self.base_dir_data = base_dir_data
 
     def write(self, table_name, formatted_data):
         if table_name not in self.file_handlers:
@@ -239,7 +182,7 @@ class CSVWriter():
         csv_writer.writerow(formatted_data)
 
     def setup(self, table_name):
-        file_handler = open(f"files/{table_name}.csv", 'w', newline='')
+        file_handler = open(f"{self.base_dir_data}/{table_name}.csv", 'w', newline='')
         csv_writer = csv.DictWriter(file_handler, fieldnames=self.unique_columns_per_table[table_name])
         csv_writer.writeheader()
 
@@ -254,28 +197,57 @@ class CSVWriter():
             file_handler.close()
 
 
-def create_data(tables):
-    unique_columns = {table_name: list(columns.keys()) for table_name, columns in tables.items()}
+def create_data(data_base_dir, initial_data):
+    unique_columns = {table_name: list(columns.keys()) for table_name, columns in initial_data.items()}
     with CSVWriter(unique_columns) as csv_writer:
-        for data in datas():
+        for data in datas(data_base_dir):
             for record in data:
                 table_name = ".".join(record["_dn"])
-                #print(record)
-                #print("----")
                 formatted_data = create_formatted_data(record)
                 csv_writer.write(table_name, formatted_data)
 
 
+def get_postgres_type(dsm_type, field_type):
+    """
+    Map custom type names to PostgreSQL data types.
 
+    Args:
+        dsm_type (str): Refers to the base type. Common base types include 'str', 'int', and 'float'.
+        field_type (str): Refers to the higher data type, representing the meaning of the data.
+                          For instance, an IP might be stored as a string, but its higher type would indicate its IP nature.
+
+    Returns:
+        str: The corresponding PostgreSQL data type.
+
+    Note:
+        This function utilizes the global variable `DSM_TO_PSQL_MAPPING` to get the mappings. This is to avoid
+        the overhead of querying the same data repeatedly (avoiding query n+1). The data in `DSM_TO_PSQL_MAPPING`
+        is sourced from the 'dsm_psql_types.csv' file.
+    """
+    base_type = DSM_TO_PSQL_MAPPING.get(dsm_type, "TEXT")
+    higher_type = DSM_TO_PSQL_MAPPING.get(field_type)
+
+    return higher_type or base_type
 
 
 if __name__ == "__main__":
     run_create_schema = True
     run_create_data = True
-    initial_data = create_initial_data()
+    data_base_dir = "/Volumes/shield/data/"
+
+    DSM_TO_PSQL_MAPPING, _ = get_dsm_psql_types()
+    initial_data = create_initial_data(data_base_dir)
+
+    time_start_total = time.time()
     if run_create_schema:
+        time_start = time.time()
+        logging.info("Starting create schema")
         create_schema(initial_data)
-        print("done with init.sql")
+        logging.info("Done with create schema. Time taken: %s seconds", round(time.time() - time_start, 2))
     if run_create_data:
-        create_data(initial_data)
-        print("done with creating data files")
+        time_start = time.time()
+        logging.info("Starting creation of data files")
+        create_data(data_base_dir, initial_data)
+        logging.info("Done with data files. Time taken: %s seconds", round(time.time() - time_start, 2))
+
+    logging.info("Postgres setup complete. Time taken: %s seconds", round(time.time() - time_start_total, 2))

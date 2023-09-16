@@ -310,28 +310,4 @@ Given the above specification, the URL query dn=foo.bar&select=foo.bar.id&select
      - `<value>` is the value for the filter. It can contain any character including `:`. After splitting, everything after the second colon (position 1) is considered part of the value.
    - Example: `filter=match:foo.bar.name:John:Smith` translates to SQL `WHERE foo_bar.name = 'John:Smith'`.
 
-### Implementation Detail:
-
-To extract the filter details from the URL parameter:
-
-1. Split the parameter value on `:`.
-2. The first part (position 0) is the operator.
-3. The second part (position 1) is the domain name (DN).
-4. Everything after the second part (from position 2 onward) is joined back with `:` to form the value.
-
-Here's a brief Go snippet for extracting the filter details:
-
-```go
-// Given filter = "match:foo.bar.name:John:Smith"
-parts := strings.SplitN(filter, ":", 3)
-if len(parts) < 3 {
-    return "", fmt.Errorf("malformed filter parameter: %s", filter)
-}
-
-operator := parts[0]
-dn := parts[1]
-value := parts[2]
-```
-
-
 

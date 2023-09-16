@@ -97,7 +97,7 @@
         <div id="app">
             <!-- Left Panel -->
             <div class="left_panel">
-                <button @click="toggleLayout">Toggle Layout</button>
+                <button @click="copyDataUrl">Copy Data URL</button>
                 <!-- Search input -->
                 <input v-model="searchQuery" placeholder="Search for nodes..." />
                 <h3>Available Nodes:</h3>
@@ -117,7 +117,7 @@
 
             <!-- Center Center Panel -->
             <div class="center_center" style="width: 100%; overflow-x: auto; margin-top: 2em;">
-                <h3 v-if="result && result.length">Results:</h3>
+                <h3 v-if="result && result.length">First {{result.length}} Results:</h3>
                 <table v-if="result && result.length" border="1" cellspacing="0" cellpadding="5">
                     <thead>
                         <tr>
@@ -139,10 +139,10 @@
 
             <!-- Download buttons -->
             <div class="download_buttons">
-                <button @click="downloadAs('json')">Download as JSON</button>
                 <button @click="downloadAs('csv')">Download as CSV</button>
-                <button @click="downloadResults">Download</button>
-                <button @click="fetchPreview">Preview</button>
+                <button @click="downloadAs('json')">Download as JSON</button>
+             <!-- <button @click="downloadResults">Download</button> -->
+             <!-- <button @click="fetchPreview">Preview</button> -->
             </div>
         </div>
 
@@ -267,14 +267,22 @@
                         }
                         return queryString;
                     },
-                    toggleLayout() {
-                        console.log(this.generateQueryString())
-                        this.fetchResults()
-                        if (this.layoutOrientation === 'horizontal') {
-                            this.layoutOrientation = 'vertical';
-                        } else {
-                            this.layoutOrientation = 'horizontal';
+                    copyDataUrl() {
+
+                        const url = `${window.location.protocol}//${window.location.host}/api/gen/?${this.generateQueryString()}`;
+                        console.log(url);
+                        const textarea = document.createElement('textarea');
+                        textarea.textContent = url;
+                        textarea.style.position = 'fixed';  // Prevent scrolling to bottom of page in MS Edge.
+                        document.body.appendChild(textarea);
+                        textarea.select();
+                        try {
+                            document.execCommand('copy');
+                            alert('URL copied to clipboard');
+                        } catch (err) {
+                            console.error('Could not copy URL', err);
                         }
+                        document.body.removeChild(textarea);
 
                         this.drawGraph();
                     },
@@ -814,14 +822,22 @@
                                 .style('background-color', '#f5f5f5') // Background color
                                 .style('font-family', 'Arial, sans-serif') // Font 
                                 .style('box-shadow', '3px 3px 10px rgba(0, 0, 0, 0.2)'); // Drop shadow
+                            if (false) { //(d.type === "field") { Issue that first option get removed
+                                menu.append('p')
+                                .text(`Type: ${d.field_type}`)
+                                .style('margin', '0')
+                                .style('padding', '10px 15px')
+                                .style('font-weight', 'bold') // Make the type bold for emphasis
+                                .style('border-bottom', '1px solid rgba(0, 0, 0, 0.1)'); // Soft border underneath
+                            }
+
 
                             const contextMenuOptionsMap = {
                                 "field": ['Remove', 'Filter', 'Link', 'Orderby'],
                                 "operator": ['Remove'],
                             }
-
+                            console.log(d.field_type)
                             const options = contextMenuOptionsMap[d.type] || [];
-                            // Append our three options to the menu
                             menu.selectAll('p')
                                 .data(options)
                                 .enter()
