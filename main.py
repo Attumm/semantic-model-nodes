@@ -197,9 +197,9 @@ class CSVWriter():
             file_handler.close()
 
 
-def create_data(data_base_dir, initial_data):
+def create_data(data_base_dir, write_base_dir, initial_data):
     unique_columns = {table_name: list(columns.keys()) for table_name, columns in initial_data.items()}
-    with CSVWriter(unique_columns) as csv_writer:
+    with CSVWriter(unique_columns, write_base_dir) as csv_writer:
         for data in datas(data_base_dir):
             for record in data:
                 table_name = ".".join(record["_dn"])
@@ -233,7 +233,11 @@ def get_postgres_type(dsm_type, field_type):
 if __name__ == "__main__":
     run_create_schema = True
     run_create_data = True
-    data_base_dir = "/Volumes/shield/data/"
+    default_data_base_dir = "/Volumes/shield/data/"
+    default_write_base_dir = "/Volumes/shield/data/__meta__/nodes/files"
+
+    data_base_dir = sys.argv[sys.argv.index("-data")+1] if "-data" in sys.argv else default_data_base_dir
+    write_base_dir = sys.argv[sys.argv.index("-write")+1] if "-write" in sys.argv else default_write_base_dir
 
     DSM_TO_PSQL_MAPPING, _ = get_dsm_psql_types()
     initial_data = create_initial_data(data_base_dir)
@@ -247,7 +251,7 @@ if __name__ == "__main__":
     if run_create_data:
         time_start = time.time()
         logging.info("Starting creation of data files")
-        create_data(data_base_dir, initial_data)
+        create_data(data_base_dir, write_base_dir, initial_data)
         logging.info("Done with data files. Time taken: %s seconds", round(time.time() - time_start, 2))
 
     logging.info("Postgres setup complete. Time taken: %s seconds", round(time.time() - time_start_total, 2))
