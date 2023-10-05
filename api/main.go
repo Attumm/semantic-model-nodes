@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -19,7 +21,6 @@ import (
 
 	_ "github.com/lib/pq"
 )
-
 
 var DB *sql.DB
 
@@ -87,6 +88,7 @@ var Queries = map[string]string{
 }
 
 type RequestData struct {
+	Gzip        bool
 	Format      string
 	RawQuery    string
 	Query       string
@@ -668,13 +670,13 @@ func parseInput(r *http.Request) (*RequestData, error) {
 	if format == "json" && groupByKey != "" {
 		format = "jsonGrouped"
 	}
-	groupByKey2 := r.URL.Query().Get("groupby2")
 
 	return &RequestData{
+		Gzip:        strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip"),
 		Format:      format,
 		Query:       query,
 		GroupByKey:  groupByKey,
-		GroupByKey2: groupByKey2,
+		GroupByKey2: r.URL.Query().Get("groupby2"),
 		Params:      params,
 	}, nil
 }
@@ -782,6 +784,12 @@ func QueriesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(queryInfoList)
 }
+
+type Writer interface {
+	io.Writer
+	Flush() error
+}
+
 func streamJSON_MEM2(w http.ResponseWriter, rows *sql.Rows, requestData *RequestData) {
 	cols, err := rows.Columns()
 	if err != nil {
@@ -789,15 +797,21 @@ func streamJSON_MEM2(w http.ResponseWriter, rows *sql.Rows, requestData *Request
 		return
 	}
 
+	var writer Writer
+	if requestData.Gzip {
+		w.Header().Set("Content-Encoding", "gzip")
+		gw, _ := gzip.NewWriterLevel(w, gzip.BestSpeed)
+		defer gw.Close()
+		writer = gw
+	} else {
+		bw := bufio.NewWriter(w)
+		defer bw.Flush()
+		writer = bw
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-
-	const bufferSize = 2 * 1024 * 1024 // 2MB
-
-	bw := bufio.NewWriterSize(w, bufferSize)
-	//bw := bufio.NewWriter(w)
-
-	if _, err = bw.Write([]byte("[")); err != nil {
+	if _, err = writer.Write([]byte("[")); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -826,13 +840,13 @@ func streamJSON_MEM2(w http.ResponseWriter, rows *sql.Rows, requestData *Request
 		if isFirst {
 			isFirst = false
 		} else {
-			if _, err = bw.Write([]byte(",")); err != nil {
+			if _, err = writer.Write([]byte(",")); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
 		}
 
-		if err := json.NewEncoder(bw).Encode(entry); err != nil {
+		if err := json.NewEncoder(writer).Encode(entry); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -843,12 +857,12 @@ func streamJSON_MEM2(w http.ResponseWriter, rows *sql.Rows, requestData *Request
 		return
 	}
 
-	if _, err = bw.Write([]byte("]")); err != nil {
+	if _, err = writer.Write([]byte("]")); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	if err = bw.Flush(); err != nil {
+	if err = writer.Flush(); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -1387,7 +1401,7 @@ func main() {
 	http.ListenAndServe(SERVER_HOST, nil)
 }
 func logMemoryUsagePeriodically() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(60 * 60 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
 		var m runtime.MemStats

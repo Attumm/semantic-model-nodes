@@ -669,7 +669,7 @@
                             const currentContext = this;
 
                             // Make the API call to get the possible fields for linking
-                            const response = await fetch(`http://127.0.0.1:8080/api/link-possible/${nodeData.parent}/${nodeData.name}?groupby=node`);
+                            const response = await fetch(`api/link-possible/${nodeData.parent}/${nodeData.name}?groupby=node`);
                             const data = await response.json();
 
                             // Create HTML for dropdowns

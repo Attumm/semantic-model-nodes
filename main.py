@@ -16,6 +16,13 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
+
+# If RBAC STICT is set to False, use RBAC_DEFAULT when RBAC is not set on the node
+# Needed when dsm-models are not 100% correct. 
+RBAC_STRICT = False
+RBAC_DEFAULT = []
+
+
 META_RBAC_KEY = "__meta__rbac_read_groups"
 uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
@@ -109,17 +116,30 @@ def create_initial_data(data_base_dir):
                     tables[table_name] = {}
 
             for column in columns:
-                postgres_type = get_postgres_type(table_data.get(f"_{column}_type", "string"), table_data.get(f"_{column}_field_type"))
+                prev_type = tables.get(table_name, {}).get(column)
+                postgres_type = get_postgres_type(table_data.get(f"_{column}_type", "string"), table_data.get(f"_{column}_field_type"), prev_type)
+
                 tables[table_name][column] = postgres_type
 
             tables[table_name][META_RBAC_KEY] = "text[]"
     return tables
 
 
-def create_schema(tables):
+def iter_order(first, dic):
+    seen = set(first)
+
+    for key in first:
+        yield key, dic[key]
+    
+    for key, value in dic.items():
+        if key not in seen:
+            yield key, value
+
+def create_schema(base_dir, tables):
     # Generate CREATE TABLE statements
-    with open('init.sql', 'w') as f:
-        for table_name, columns_data in tables.items():
+    order = ["standard"]
+    with open(f"{base_dir}/init.sql", 'w') as f:
+        for table_name, columns_data in iter_order(order, tables):
             f.write(generate_create_table_sql(table_name, columns_data))
             f.write("\n\n---\n\n")
 
@@ -142,10 +162,15 @@ def get_row_level_read_access(record):
     if not isinstance(columns, list) or len(columns) <= 0:
         return []
 
+    if not RBAC_STRICT and f"_{columns[0]}_rbac_read" not in record:
+        return RBAC_DEFAULT
+
     row_level_rbac_read = set(record[f"_{columns[0]}_rbac_read"])
 
     for col in columns[1:]:
         rbac_key = f"_{col}_rbac_read"
+        if not RBAC_STRICT and rbac_key not in record:
+            return RBAC_DEFAULT
         row_level_rbac_read &= set(record[rbac_key])
 
     return list(row_level_rbac_read)
@@ -207,7 +232,7 @@ def create_data(data_base_dir, write_base_dir, initial_data):
                 csv_writer.write(table_name, formatted_data)
 
 
-def get_postgres_type(dsm_type, field_type):
+def get_postgres_type(dsm_type, field_type, prev_type):
     """
     Map custom type names to PostgreSQL data types.
 
@@ -224,20 +249,27 @@ def get_postgres_type(dsm_type, field_type):
         the overhead of querying the same data repeatedly (avoiding query n+1). The data in `DSM_TO_PSQL_MAPPING`
         is sourced from the 'dsm_psql_types.csv' file.
     """
-    base_type = DSM_TO_PSQL_MAPPING.get(dsm_type, "TEXT")
+    lowest_common_denominattor = "TEXT"
+    result = DSM_TO_PSQL_MAPPING.get(dsm_type, lowest_common_denominattor)
     higher_type = DSM_TO_PSQL_MAPPING.get(field_type)
+    if higher_type is not None:
+        result = higher_type
 
-    return higher_type or base_type
+    if prev_type is not None and prev_type != result:
+        return lowest_common_denominattor
+    return result
 
 
 if __name__ == "__main__":
     run_create_schema = True
     run_create_data = True
     default_data_base_dir = "/Volumes/shield/data/"
-    default_write_base_dir = "/Volumes/shield/data/__meta__/nodes/files"
+    default_write_base_dir = "/Volumes/shield/data/__meta__/node/"
+    data_files_dir = "files"
 
     data_base_dir = sys.argv[sys.argv.index("-data")+1] if "-data" in sys.argv else default_data_base_dir
     write_base_dir = sys.argv[sys.argv.index("-write")+1] if "-write" in sys.argv else default_write_base_dir
+    write_data_files = f"{write_base_dir}/{data_files_dir}"
 
     DSM_TO_PSQL_MAPPING, _ = get_dsm_psql_types()
     initial_data = create_initial_data(data_base_dir)
@@ -246,12 +278,12 @@ if __name__ == "__main__":
     if run_create_schema:
         time_start = time.time()
         logging.info("Starting create schema")
-        create_schema(initial_data)
+        create_schema(write_base_dir, initial_data)
         logging.info("Done with create schema. Time taken: %s seconds", round(time.time() - time_start, 2))
     if run_create_data:
         time_start = time.time()
         logging.info("Starting creation of data files")
-        create_data(data_base_dir, write_base_dir, initial_data)
+        create_data(data_base_dir, write_data_files, initial_data)
         logging.info("Done with data files. Time taken: %s seconds", round(time.time() - time_start, 2))
 
     logging.info("Postgres setup complete. Time taken: %s seconds", round(time.time() - time_start_total, 2))
